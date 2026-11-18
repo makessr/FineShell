@@ -197,6 +197,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 前端通过版本化的 Tauri 命令与事件协议调用 Rust 后端。SSH、SFTP、文件传输和系统监控都在后端执行，前端只接收展示所需的数据与状态事件。
 
+## 主机账号同步
+
+跨设备同步已保存的主机、分组及关联的 SSH 凭据。同步服务由部署者运行，设备通过独立恢复密钥解锁数据。见[主机同步服务文档](sync-server/README.md)。
+
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。开始较大改动前，建议先通过 Issue 对齐范围。

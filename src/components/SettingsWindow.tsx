@@ -59,6 +59,7 @@ import AiSettings from "./AiSettings";
 import AboutSettings from "./AboutSettings";
 import ConfigurationMaintenance from "./ConfigurationMaintenance";
 import CloudBackupSettings from "./CloudBackupSettings";
+import HostSyncSettings from "./HostSyncSettings";
 import KnownHostSettings from "./KnownHostSettings";
 import PrivacySettings from "./PrivacySettings";
 import ProxySettings from "./ProxySettings";
@@ -80,6 +81,7 @@ type SettingsSection =
   | "proxies"
   | "backups"
   | "cloudBackup"
+  | "hostSync"
   | "trash"
   | "about";
 
@@ -95,6 +97,7 @@ const NESTED_SECTION_TITLES: Partial<Record<SettingsSection, string>> = {
   privacy: "隐私与清理",
   backups: "备份与恢复",
   cloudBackup: "云备份",
+  hostSync: "主机同步",
   trash: "回收站",
 };
 
@@ -799,6 +802,8 @@ function SettingsWindow() {
             section="backups"
           />
         );
+      case "hostSync":
+        return <HostSyncSettings />;
       case "cloudBackup":
         return (
           <CloudBackupSettings
@@ -895,6 +900,7 @@ function SettingsWindow() {
             <Menu.Item key="privacy">隐私与清理</Menu.Item>
             <Menu.Item key="backups">备份与恢复</Menu.Item>
             <Menu.Item key="cloudBackup">云备份</Menu.Item>
+            <Menu.Item key="hostSync">主机同步</Menu.Item>
             <Menu.Item key="trash">回收站</Menu.Item>
           </Menu.SubMenu>
           <Menu.Item key="advanced">

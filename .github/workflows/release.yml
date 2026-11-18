@@ -27,6 +27,8 @@ jobs:
     outputs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       should_release: ${{ steps.trigger.outputs.should_release }}
+      platforms: ${{ steps.platforms.outputs.platforms }}
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,6 +84,28 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
         run: bun scripts/extract-release-notes.ts "$RELEASE_TAG" > /tmp/release-notes.md
+      - id: platforms
+        name: Select release platforms
+        if: steps.trigger.outputs.should_release == 'true'
+        env:
+          RELEASE_PLATFORMS: ${{ vars.FINESHELL_RELEASE_PLATFORMS || 'all' }}
+          RELEASE_MATRIX: >-
+            [
+              {"name":"macOS Apple Silicon","platform":"macos-latest","rustTargets":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin --bundles app,dmg","appleSigningIdentity":"-"},
+              {"name":"macOS Intel","platform":"macos-15-intel","rustTargets":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin --bundles app,dmg","appleSigningIdentity":"-"},
+              {"name":"Linux x64","platform":"ubuntu-22.04","rustTargets":"","args":"--bundles deb","appleSigningIdentity":""},
+              {"name":"Linux ARM64","platform":"ubuntu-22.04-arm","rustTargets":"aarch64-unknown-linux-gnu","args":"--target aarch64-unknown-linux-gnu --bundles deb","appleSigningIdentity":""},
+              {"name":"Windows x64","platform":"windows-latest","rustTargets":"","args":"--bundles nsis,msi","appleSigningIdentity":""},
+              {"name":"Windows ARM64","platform":"windows-11-arm","rustTargets":"aarch64-pc-windows-msvc","args":"--target aarch64-pc-windows-msvc --bundles nsis","appleSigningIdentity":""}
+            ]
+        run: |
+          case "$RELEASE_PLATFORMS" in
+            all) matrix="$(jq -c . <<< "$RELEASE_MATRIX")" ;;
+            windows) matrix="$(jq -c 'map(select(.platform | startswith("windows-")))' <<< "$RELEASE_MATRIX")" ;;
+            *) echo "Invalid FINESHELL_RELEASE_PLATFORMS value" >&2; exit 1 ;;
+          esac
+          echo "platforms=$RELEASE_PLATFORMS" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   prepare:
     name: Prepare draft release
@@ -123,42 +147,13 @@ jobs:
     needs:
       - validate
       - prepare
+    if: needs.validate.outputs.should_release == 'true'
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS Apple Silicon
-            platform: macos-latest
-            rustTargets: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin --bundles app,dmg
-            appleSigningIdentity: "-"
-          - name: macOS Intel
-            platform: macos-15-intel
-            rustTargets: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin --bundles app,dmg
-            appleSigningIdentity: "-"
-          - name: Linux x64
-            platform: ubuntu-22.04
-            rustTargets: ""
-            args: --bundles deb
-            appleSigningIdentity: ""
-          - name: Linux ARM64
-            platform: ubuntu-22.04-arm
-            rustTargets: aarch64-unknown-linux-gnu
-            args: --target aarch64-unknown-linux-gnu --bundles deb
-            appleSigningIdentity: ""
-          - name: Windows x64
-            platform: windows-latest
-            rustTargets: ""
-            args: --bundles nsis,msi
-            appleSigningIdentity: ""
-          - name: Windows ARM64
-            platform: windows-11-arm
-            rustTargets: aarch64-pc-windows-msvc
-            args: --target aarch64-pc-windows-msvc --bundles nsis
-            appleSigningIdentity: ""
+        include: ${{ fromJSON(needs.validate.outputs.matrix) }}
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -199,6 +194,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ matrix.appleSigningIdentity }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
           generateReleaseNotes: false
@@ -282,7 +278,8 @@ jobs:
       - name: Validate updater manifest
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-        run: bun scripts/validate-updater-manifest.ts "$RUNNER_TEMP/updater/latest.json" "$RELEASE_TAG"
+          RELEASE_PLATFORMS: ${{ needs.validate.outputs.platforms }}
+        run: bun scripts/validate-updater-manifest.ts "$RUNNER_TEMP/updater/latest.json" "$RELEASE_TAG" "$RELEASE_PLATFORMS"
       - name: Upload normalized updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -292,6 +289,14 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
         run: bun scripts/extract-release-notes.ts "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
+      - name: Verify production sync service
+        if: vars.FINESHELL_SYNC_HEALTH_URL != ''
+        env:
+          SYNC_HEALTH_URL: ${{ vars.FINESHELL_SYNC_HEALTH_URL }}
+        run: |
+          set -o pipefail
+          curl --fail --silent --show-error --max-time 15 "$SYNC_HEALTH_URL" |
+            jq -e '.service == "fineshell-sync" and .status == "ok"'
       - name: Publish completed release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

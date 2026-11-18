@@ -10,6 +10,16 @@ permissions:
   contents: read
 
 jobs:
+  sync-server:
+    name: Host sync service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - run: node --test sync-server/server.integration.mjs
+
   frontend:
     name: Frontend tests and build
     runs-on: ubuntu-latest

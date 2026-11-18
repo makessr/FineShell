@@ -50,6 +50,34 @@ function renderTabs(
 }
 
 describe("SessionTabs", () => {
+  test("shows both terminal panes while retaining the selected terminal", () => {
+    const second = { ...SESSION, id: "session-2", host: { ...HOST, name: "第二台主机" } };
+    const onChange = mock(() => undefined);
+    const { container } = render(
+      <SessionTabs
+        activeSessionId={SESSION.id}
+        aiAssistantVisible={false}
+        hasActiveSession
+        homeContent={<div>主机管理内容</div>}
+        onActiveSessionChange={onChange}
+        onCloseSession={() => undefined}
+        onToggleAiAssistant={() => undefined}
+        renderSession={(session) => <div>终端 {session.host.name}</div>}
+        sessionContextMenuItems={() => []}
+        sessions={[SESSION, second]}
+      />,
+    );
+    const first = container.querySelector('[aria-label="生产服务器"].terminal-pane');
+    expect(screen.getAllByRole("region")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "终端布局" }));
+    fireEvent.click(screen.getByText("左右分屏"));
+    expect(screen.getAllByRole("region")).toHaveLength(2);
+    expect(container.querySelector(".terminal-panes-columns")).not.toBeNull();
+    expect(container.querySelector('[aria-label="生产服务器"].terminal-pane')).toBe(first);
+    fireEvent.focus(screen.getByRole("region", { name: "第二台主机" }));
+    expect(onChange).toHaveBeenCalledWith("session-2");
+  });
+
   test("keeps the fixed home entry outside the scrollable tabs", () => {
     const { container } = renderTabs(null);
     const fixedHome = container.querySelector(".terminal-home-tab");

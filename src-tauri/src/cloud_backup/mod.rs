@@ -1,5 +1,5 @@
-mod crypto;
-mod types;
+pub(crate) mod crypto;
+pub(crate) mod types;
 
 use std::{collections::HashMap, sync::Mutex};
 

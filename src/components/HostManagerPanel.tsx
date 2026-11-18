@@ -11,6 +11,7 @@ import {
   Empty,
   Input,
   Message,
+  Modal,
   Select,
   Table,
   Tooltip,
@@ -62,7 +63,9 @@ import {
 } from "../host-organization";
 import {
   loadConfiguration,
+  updateConfiguration,
 } from "../config-database";
+import { mergeSshConfig, parseSshConfig } from "../ssh-config-import";
 import {
   moveHostToTrash,
   purgeExpiredDeletedHosts,
@@ -80,6 +83,59 @@ import {
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function OpenSshImportPreview({ contents, onImport, onClose }: {
+  contents: string;
+  onImport: (hosts: ReturnType<typeof parseSshConfig>["hosts"]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [saving, setSaving] = useState(false);
+  const preview = useMemo(() => {
+    try {
+      return { ...parseSshConfig(contents, username), error: undefined };
+    } catch (error) {
+      return { hosts: [], skipped: [], error: commandErrorMessage(error) };
+    }
+  }, [contents, username]);
+  return (
+    <Modal
+      title="导入 OpenSSH 配置"
+      visible
+      okText="导入主机"
+      okButtonProps={{ disabled: !preview.hosts.length }}
+      confirmLoading={saving}
+      onCancel={onClose}
+      onOk={async () => {
+        setSaving(true);
+        try {
+          await onImport(preview.hosts);
+          onClose();
+        } catch (error) {
+          Message.error(commandErrorMessage(error));
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <Input
+        aria-label="默认 SSH 用户名"
+        placeholder="默认 SSH 用户名（用于未设置 User 的主机）"
+        value={username}
+        onChange={setUsername}
+      />
+      <Typography.Paragraph>
+        {preview.error ?? `可导入 ${preview.hosts.length} 条，跳过 ${preview.skipped.length} 条。同名主机保留原记录。`}
+      </Typography.Paragraph>
+      {(preview.hosts.length > 0 || preview.skipped.length > 0) && (
+        <ul style={{ maxHeight: 220, overflow: "auto" }}>
+          {preview.hosts.map((host) => <li key={host.name}>{host.name} · {host.username}@{host.address}</li>)}
+          {preview.skipped.map((message) => <li key={message}>{message}</li>)}
+        </ul>
+      )}
+    </Modal>
+  );
 }
 
 async function storeHostPassword(hostId: string, password: string) {
@@ -164,6 +220,7 @@ interface HostManagerPanelProps {
 }
 
 function HostManagerPanel({ onConnect, settings }: HostManagerPanelProps) {
+  const [sshImportContents, setSshImportContents] = useState<string>();
   const hostTableContainerRef = useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<HostRecord[]>([]);
   const [history, setHistory] = useState<ConnectionHistoryRecord[]>([]);
@@ -832,6 +889,24 @@ function HostManagerPanel({ onConnect, settings }: HostManagerPanelProps) {
 
   return (
     <main className="host-manager-panel">
+      {sshImportContents !== undefined && (
+        <OpenSshImportPreview
+          contents={sshImportContents}
+          onClose={() => setSshImportContents(undefined)}
+          onImport={async (incoming) => {
+            let added = 0;
+            let skipped = 0;
+            const configuration = await updateConfiguration((current) => {
+              const merged = mergeSshConfig(current.hosts, incoming, () => createId("host"));
+              added = merged.added;
+              skipped = merged.skipped;
+              return { ...current, hosts: merged.hosts };
+            });
+            setHosts(configuration.hosts);
+            Message.success(`已导入 ${added} 条主机，跳过 ${skipped} 条`);
+          }}
+        />
+      )}
       <section className="manager-pane hosts-manager-content">
         <div className="manager-toolbar">
           <div className="manager-toolbar-filters">
@@ -859,6 +934,23 @@ function HostManagerPanel({ onConnect, settings }: HostManagerPanelProps) {
             </div>
           </div>
           <div className="manager-toolbar-actions">
+            {isTauri() && (
+              <Button
+                disabled={configurationLoading || configurationAction}
+                onClick={async () => {
+                  try {
+                    const path = await open({ multiple: false, directory: false, title: "选择 OpenSSH 配置文件" });
+                    if (typeof path === "string") {
+                      setSshImportContents(await invoke<string>("read_config_file", { path }));
+                    }
+                  } catch (error) {
+                    Message.error(commandErrorMessage(error));
+                  }
+                }}
+              >
+                导入 SSH 配置
+              </Button>
+            )}
             <Button
               disabled={configurationLoading || configurationAction}
               icon={<IconPlus />}

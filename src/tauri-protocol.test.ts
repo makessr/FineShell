@@ -30,8 +30,10 @@ describe("Tauri shared protocol", () => {
     expect(PROTOCOL_VERSION).toBe(contract.version);
     expect(contract.commands[command]).toBe(true);
     expect(contract.events[event]).toBe(true);
-    expect(Object.keys(contract.commands)).toHaveLength(105);
-    expect(Object.keys(contract.events)).toHaveLength(11);
+    expect(contract.commands.host_sync_login).toBe(true);
+    expect(contract.events["host-sync:request"]).toBe(true);
+    expect(Object.keys(contract.commands)).toHaveLength(111);
+    expect(Object.keys(contract.events)).toHaveLength(12);
   });
 
   test("exposes canonical agent lifecycle values", () => {

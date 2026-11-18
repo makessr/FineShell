@@ -33,16 +33,7 @@ pub(super) fn validate_fingerprint(expected: Option<&str>, actual: &str) -> Resu
 }
 
 pub(super) fn resolve_private_key_path(path: &str) -> Result<PathBuf, String> {
-    if let Some(path) = crate::managed_keys::resolve_reference(path)? {
-        return Ok(path);
-    }
-    let Some(relative) = path.strip_prefix("~/") else {
-        return Ok(PathBuf::from(path));
-    };
-    Ok(std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|home| PathBuf::from(home).join(relative))
-        .unwrap_or_else(|| PathBuf::from(path)))
+    crate::managed_keys::resolve_private_key_path(path)
 }
 
 pub(super) fn configure_keepalive(session: &Session, interval_seconds: u32) {

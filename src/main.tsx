@@ -9,6 +9,7 @@ import { installGlobalDiagnostics } from "./diagnostics";
 import { installSelectAllShortcuts } from "./select-all-shortcut";
 import { windowViewFromContext } from "./window-view";
 import { initializeAppearance } from "./appearance";
+import { startHostSync } from "./host-sync";
 
 initializeAppearance();
 installGlobalDiagnostics();
@@ -33,6 +34,8 @@ const RootView =
     : view === "shortcuts"
       ? ShortcutGuideWindow
       : App;
+
+if (RootView === App) startHostSync();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

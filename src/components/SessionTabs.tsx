@@ -1,12 +1,13 @@
-import type { ReactNode } from "react";
-import { Button, Tabs, Tooltip } from "@arco-design/web-react";
+import { useState, type ReactNode } from "react";
+import { Button, Dropdown, Menu, Tabs, Tooltip } from "@arco-design/web-react";
 import { IconHome } from "@arco-design/web-react/icon";
-import { Bot } from "lucide-react";
+import { Bot, Columns2 } from "lucide-react";
 import type { TerminalSession } from "../models";
 import { sessionTabName } from "../terminal-utils";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 
 const HOME_TAB_ID = "home";
+type SplitDirection = "columns" | "rows";
 
 interface SessionTabsProps {
   activeSessionId: string | null;
@@ -47,6 +48,44 @@ function SessionTabs({
   sessionContextMenuItems,
   sessions,
 }: SessionTabsProps) {
+  const [split, setSplit] = useState<{
+    first: string;
+    second: string;
+    direction: SplitDirection;
+  }>();
+  const sessionIds = sessions.map(({ id }) => id);
+  const companion = split && sessionIds.find((id) => id !== activeSessionId);
+  const visiblePair = split && activeSessionId && companion
+    ? [split.first, split.second].includes(activeSessionId)
+      && sessionIds.includes(split.first) && sessionIds.includes(split.second)
+      ? [split.first, split.second]
+      : [split.first !== activeSessionId && sessionIds.includes(split.first)
+        ? split.first : companion, activeSessionId]
+    : undefined;
+
+  function selectSession(id: string | null) {
+    if (split && visiblePair && id) {
+      const [first, second] = visiblePair;
+      setSplit(visiblePair.includes(id)
+        ? { ...split, first, second }
+        : activeSessionId === first
+          ? { ...split, first: id, second }
+          : { ...split, first, second: id });
+    }
+    onActiveSessionChange(id);
+  }
+
+  function changeSplit(mode: string) {
+    if (mode === "single") {
+      setSplit(undefined);
+      return;
+    }
+    const other = sessions.find(({ id }) => id !== activeSessionId);
+    if (activeSessionId && other) {
+      const [first, second] = visiblePair ?? [activeSessionId, other.id];
+      setSplit({ first, second, direction: mode === "rows" ? "rows" : "columns" });
+    }
+  }
   return (
     <>
       <button
@@ -54,7 +93,7 @@ function SessionTabs({
         className={`terminal-home-tab${
           activeSessionId === null ? " terminal-home-tab-active" : ""
         }`}
-        onClick={() => onActiveSessionChange(null)}
+        onClick={() => selectSession(null)}
         role="tab"
         type="button"
       >
@@ -65,9 +104,9 @@ function SessionTabs({
         activeTab={activeSessionId ?? HOME_TAB_ID}
         className="terminal-tabs"
         editable
-        onAddTab={() => onActiveSessionChange(null)}
+        onAddTab={() => selectSession(null)}
         onChange={(tabId) =>
-          onActiveSessionChange(tabId === HOME_TAB_ID ? null : tabId)
+          selectSession(tabId === HOME_TAB_ID ? null : tabId)
         }
         onDeleteTab={onCloseSession}
         showAddButton
@@ -83,9 +122,7 @@ function SessionTabs({
               <span className="terminal-tab-name">首页</span>
             </span>
           }
-        >
-          {homeContent}
-        </Tabs.TabPane>
+        />
         {sessions.map((session) => (
           <Tabs.TabPane
             closable
@@ -94,7 +131,7 @@ function SessionTabs({
               <ContextMenu items={sessionContextMenuItems(session)}>
                 <span
                   className="terminal-tab-context-target terminal-tab-label"
-                  onContextMenu={() => onActiveSessionChange(session.id)}
+                  onContextMenu={() => selectSession(session.id)}
                 >
                   <span
                     className={`terminal-status-dot terminal-status-${session.status}`}
@@ -107,11 +144,64 @@ function SessionTabs({
                 </span>
               </ContextMenu>
             }
-          >
-            {renderSession(session)}
-          </Tabs.TabPane>
+          />
         ))}
       </Tabs>
+      <div className="terminal-workspace" hidden={activeSessionId !== null}>
+        {homeContent}
+      </div>
+      <div
+        className={`terminal-workspace terminal-panes${visiblePair ? ` terminal-panes-${split?.direction}` : ""}`}
+        hidden={activeSessionId === null}
+      >
+        {sessions.map((session) => {
+          const paneIndex = visiblePair?.indexOf(session.id);
+          const visible = paneIndex === undefined
+            ? session.id === activeSessionId
+            : paneIndex >= 0;
+          return (
+            <div
+              aria-label={session.host.name}
+              className="terminal-pane"
+              hidden={!visible}
+              key={session.id}
+              onFocusCapture={() => {
+                if (visible && activeSessionId !== session.id) selectSession(session.id);
+              }}
+              onPointerDownCapture={(event) => {
+                if (event.button === 0 && visible && activeSessionId !== session.id) {
+                  selectSession(session.id);
+                }
+              }}
+              role="region"
+              style={{ order: paneIndex }}
+            >
+              {renderSession(session)}
+            </div>
+          );
+        })}
+      </div>
+      <div className="terminal-split-action">
+        <Dropdown
+          droplist={
+            <Menu onClickMenuItem={changeSplit}>
+              <Menu.Item key="columns">左右分屏</Menu.Item>
+              <Menu.Item key="rows">上下分屏</Menu.Item>
+              <Menu.Item key="single">单窗口</Menu.Item>
+            </Menu>
+          }
+          trigger="click"
+        >
+          <Button
+            aria-label="终端布局"
+            className="terminal-ai-action-button"
+            disabled={!hasActiveSession || sessions.length < 2}
+            icon={<Columns2 aria-hidden="true" />}
+            title="终端布局"
+            type="text"
+          />
+        </Dropdown>
+      </div>
       <div className="terminal-ai-action">
         <Tooltip content="AI">
           <span>

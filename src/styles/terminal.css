@@ -1,8 +1,10 @@
 .terminal-panel {
-  --terminal-ai-action-width: 44px;
+  --terminal-ai-action-width: 78px;
   --terminal-home-tab-width: 92px;
   --terminal-tab-height: 36px;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .terminal-home-tab {
@@ -52,7 +54,8 @@
 }
 
 .terminal-tabs {
-  height: 100%;
+  flex: 0 0 var(--terminal-tab-height);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--color-bg-2);
@@ -177,7 +180,8 @@
   background: var(--color-fill-2);
 }
 
-.terminal-ai-action {
+.terminal-ai-action,
+.terminal-split-action {
   position: absolute;
   top: 3px;
   right: 8px;
@@ -189,6 +193,10 @@
   justify-content: center;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.terminal-split-action {
+  right: 42px;
 }
 
 .terminal-ai-action > span,
@@ -265,16 +273,39 @@
 }
 
 .terminal-tabs > .arco-tabs-content {
-  flex: 1;
-  min-height: 0;
-  padding: 0;
-  border: 0;
+  display: none;
 }
 
-.terminal-tabs .arco-tabs-content-inner,
-.terminal-tabs .arco-tabs-content-item,
-.terminal-tabs .arco-tabs-pane {
-  height: 100%;
+.terminal-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.terminal-panes:not([hidden]) {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.terminal-panes-columns:not([hidden]) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.terminal-panes-rows:not([hidden]) {
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.terminal-panes-columns,
+.terminal-panes-rows {
+  gap: 1px;
+  background: var(--color-border-2);
+}
+
+.terminal-pane {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .terminal-view {

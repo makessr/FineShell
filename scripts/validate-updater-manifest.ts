@@ -87,6 +87,7 @@ function validatePlatform(key: string, value: unknown, releaseTag: string) {
 export function validateUpdaterManifest(
   value: unknown,
   releaseTag: string,
+  platformSet: "all" | "windows" = "all",
 ) {
   if (!isRecord(value)) throw new Error("更新清单格式无效");
 
@@ -105,7 +106,10 @@ export function validateUpdaterManifest(
     validatePlatform(key, platform, releaseTag);
   });
 
-  const matchedPlatforms = REQUIRED_PLATFORM_GROUPS.map(({ keys, label }) => {
+  const required = platformSet === "windows"
+    ? REQUIRED_PLATFORM_GROUPS.filter(({ label }) => label.startsWith("Windows"))
+    : REQUIRED_PLATFORM_GROUPS;
+  const matchedPlatforms = required.map(({ keys, label }) => {
     const key = keys.find((candidate) => candidate in manifest.platforms!);
     if (!key) {
       throw new Error(
@@ -122,10 +126,12 @@ if (import.meta.main) {
   try {
     const manifestPath = process.argv[2];
     const releaseTag = process.argv[3] ?? "";
+    const platformSet = process.argv[4] ?? "all";
     if (!manifestPath) throw new Error("缺少 latest.json 路径");
+    if (platformSet !== "all" && platformSet !== "windows") throw new Error("发布平台范围无效");
 
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    const platforms = validateUpdaterManifest(manifest, releaseTag);
+    const platforms = validateUpdaterManifest(manifest, releaseTag, platformSet);
     console.log(`更新清单校验通过：${platforms.join(", ")}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

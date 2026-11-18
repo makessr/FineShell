@@ -13,6 +13,7 @@ mod credentials;
 mod diagnostics;
 mod dynamic_forward;
 mod external_edit;
+mod host_sync;
 mod local_files;
 mod managed_keys;
 mod monitor;
@@ -84,6 +85,12 @@ pub fn run() {
 
     let app = builder
         .invoke_handler(tauri::generate_handler![
+            host_sync::host_sync_account,
+            host_sync::host_sync_recovery_key,
+            host_sync::host_sync_login,
+            host_sync::host_sync_logout,
+            host_sync::host_sync_exchange,
+            host_sync::host_sync_apply,
             protocol::protocol_version,
             #[cfg(desktop)]
             native_menu::open_settings_window,

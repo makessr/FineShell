@@ -15,7 +15,7 @@ use crate::protocol::{CommandError, CommandResult};
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const FINESHELL_LATEST_RELEASE_URL: &str =
-    "https://github.com/Max0897/fineshell/releases/latest/download/latest.json";
+    "https://github.com/makessr/FineShell/releases/latest/download/latest.json";
 const BUILTIN_MIRRORS: [(&str, &str); 2] = [
     ("gh-proxy.com", "https://gh-proxy.com/"),
     ("ghproxy.net", "https://ghproxy.net/"),
