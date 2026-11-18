@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Max0897/fineshell/actions/workflows/ci.yml"><img src="https://github.com/Max0897/fineshell/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/Max0897/fineshell/releases"><img src="https://img.shields.io/github/v/release/Max0897/fineshell?display_name=tag&sort=semver" alt="GitHub release" /></a>
+  <a href="https://github.com/makessr/FineShell/actions/workflows/ci.yml"><img src="https://github.com/makessr/FineShell/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/makessr/FineShell/releases"><img src="https://img.shields.io/github/v/release/makessr/FineShell?display_name=tag&sort=semver" alt="GitHub release" /></a>
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827" alt="React 18" />
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust" alt="Rust stable" />
@@ -19,16 +19,19 @@
 
 ![FineShell 工作区：服务器监控、终端与 SFTP 文件管理](docs/screenshots/terminal.png)
 
+本仓库是 [Max0897/FineShell](https://github.com/Max0897/FineShell) 的 fork，维护自己的 Windows 安装包、更新渠道和主机账号同步服务。
+
 ## 核心能力
 
 | 模块     | 已实现能力                                                   |
 | ------ | ------------------------------------------------------- |
-| 主机管理   | 分组与树形列表、搜索排序、连接历史、复制与回收站、配置导入导出                         |
+| 主机管理   | 分组与树形列表、搜索排序、连接历史、复制与回收站、配置导入导出、OpenSSH 主机配置导入                         |
 | SSH 连接 | 密码、私钥、托管密钥和 SSH Agent 认证，SOCKS5 / HTTP CONNECT 代理，一级跳板机 |
 | 连接可靠性  | SHA256 主机指纹确认、保活、自动重连、连接取消、结构化错误提示                      |
-| 终端     | 多主机多会话标签、内容搜索、快捷命令、动态参数、本地 / 远程 / 动态 SOCKS5 端口转发        |
+| 终端     | 多主机多会话标签、左右与上下分屏、内容搜索、快捷命令、动态参数、本地 / 远程 / 动态 SOCKS5 端口转发        |
 | AI 助手  | OpenAI 兼容服务、上下文提及、流式对话、服务器诊断、终端命令与远程文件操作、分级审批和执行结果验证       |
 | SFTP   | 上传下载、暂停继续、取消重试、批量拖拽、复制移动、排序、权限及用户/用户组管理                 |
+| 主机账号同步 | 跨设备自动同步已保存的主机、分组及关联 SSH 凭据，使用恢复密钥在设备端解密 |
 | 文件编辑   | 内置文本编辑、调用本地默认或指定编辑器、文件变化自动同步远端、冲突处理                     |
 | 归档操作   | 远程压缩与解压、目录及多选项目打包下载，支持 `.tar.gz`、`.tar` 和 `.zip`        |
 | 服务器监控  | 系统信息、CPU / 内存 / 磁盘占用与趋势、网络流量、进程管理和网络诊断                  |
@@ -107,13 +110,14 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
-前往 [GitHub Releases](https://github.com/Max0897/fineshell/releases) 下载对应平台的安装包：
+本 fork 的公开版本为 [v0.2.0](https://github.com/makessr/FineShell/releases/tag/v0.2.0)，可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
 
-- macOS：Apple Silicon / Intel `.dmg`
-- Linux：x64 / ARM64 `.deb`
-- Windows：x64 `.exe`（NSIS）/ `.msi`，ARM64 `.exe`（NSIS）
+- Windows x64 提供 `.exe`（NSIS）和 `.msi`。
+- Windows ARM64 提供 `.exe`（NSIS）。
 
-### Linux
+macOS 和 Linux 可以从源码构建，也可在 [上游 Releases](https://github.com/Max0897/FineShell/releases) 获取上游版本的安装包。
+
+### Linux 安装
 
 请使用 APT 安装 `.deb`，APT 会同时安装 FineShell 所需的 WebKitGTK 等系统依赖：
 
@@ -141,8 +145,8 @@ sudo apt --fix-broken install
 ### 启动开发环境
 
 ```bash
-git clone https://github.com/Max0897/fineshell.git
-cd fineshell
+git clone https://github.com/makessr/FineShell.git
+cd FineShell
 bun install --frozen-lockfile
 bun run tauri dev
 ```
@@ -199,7 +203,21 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ## 主机账号同步
 
-跨设备同步已保存的主机、分组及关联的 SSH 凭据。同步服务由部署者运行，设备通过独立恢复密钥解锁数据。见[主机同步服务文档](sync-server/README.md)。
+在「设置 → 主机同步」中创建账号或登录，默认使用 `https://auto.itfans.fun`，也可以填写自建同步服务地址。
+
+1. 在第一台设备创建账号，妥善保存生成的恢复密钥。
+2. 在另一台设备登录同一账号并输入恢复密钥。应用自动同步已保存的主机、分组和相关 SSH 凭据。
+3. 首次连接每台 SSH 主机时，按提示核对服务器指纹。
+
+应用在设备端加密同步数据。服务端保存加密后的数据，恢复密钥用于在新设备上解锁。自建部署与日常维护见 [主机同步服务文档](sync-server/README.md)。
+
+### 待发布的桌面改进
+
+[PR #2](https://github.com/makessr/FineShell/pull/2) 增加了登录设备列表与撤销、逐条解决同步冲突，以及私钥缺失时继续同步其他主机并提示重新关联。云端快照回退后，可在设备上确认恢复。分屏方向会记住，打开两条终端会话后恢复。上述桌面改动待随新安装包发布。
+
+### 同步服务备份
+
+服务维护者可以把 SQLite 在线快照加密备份到独立 Windows 电脑，并在内存中执行恢复演练。快照由执行备份的 Windows 用户的 DPAPI 保护。脚本和恢复步骤见 [异机备份与恢复](sync-server/README.md#异机备份与恢复)。
 
 ## 贡献
 
@@ -211,7 +229,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ## 版本发布
 
-开发过程中将变更记录到 `CHANGELOG.md` 顶部的 `Unreleased` 区域。发布时在 GitHub Actions 中运行 `Prepare Release` 并选择版本级别，工作流会统一升级版本、整理更新日志并创建发布 PR。合并发布 PR 后会自动构建 macOS、Linux 和 Windows 安装包，并发布签名后的 OTA 更新清单。
+开发过程中将变更记录到 `CHANGELOG.md` 顶部的 `Unreleased` 区域。发布时在 GitHub Actions 中运行 `Prepare Release` 并选择版本级别，工作流会统一升级版本、整理更新日志并创建发布 PR。合并发布 PR 后会按仓库变量 `FINESHELL_RELEASE_PLATFORMS` 构建对应平台的安装包，并发布签名后的 OTA 更新清单。
 
 GitHub 仓库需要配置 Tauri 更新签名私钥 `TAURI_SIGNING_PRIVATE_KEY`。完整架构与失败重试方式见 [发布流水线文档](docs/release-pipeline.md)。
 
