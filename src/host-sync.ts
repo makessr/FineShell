@@ -35,16 +35,67 @@ interface AppliedConfiguration extends HostSyncConfiguration {
   credentials: CredentialProbeResult[];
 }
 
+export interface HostSyncConflict {
+  id: string;
+  local: Record<string, unknown> | null;
+  cloud: Record<string, unknown> | null;
+  credentialChanged: boolean;
+}
+
+export interface BlockedSyncRecord {
+  kind: "hosts" | "keys";
+  id: string;
+  name: string;
+  preserve: boolean;
+  relink: boolean;
+}
+
+export interface HostSyncDevice {
+  id: string;
+  name: string;
+  current: boolean;
+  lastSyncAt: number | null;
+}
+
+export interface SyncOptions {
+  resolution?: { snapshot: string; choices: Record<string, boolean> };
+  recover?: boolean;
+  manual?: boolean;
+}
+
 interface SyncResult {
   base: object;
   expectedLocal?: object | null;
+  conflicts?: HostSyncConflict[];
+  conflictSnapshot?: string | null;
+  blocked?: BlockedSyncRecord[];
+}
+
+export function hostSyncDevices(accountId: string, revoke?: string) {
+  return invoke<HostSyncDevice[]>("host_sync_devices", { accountId, revoke });
+}
+
+export async function relinkHostSyncKey(issue: BlockedSyncRecord, path: string) {
+  await updateConfiguration((current) => issue.kind === "keys"
+    ? { ...current, sshKeys: current.sshKeys.map((item) => item.id === issue.id
+      ? { ...item, privateKeyPath: path, source: "file" } : item) }
+    : { ...current, hosts: current.hosts.map((item) => item.id === issue.id
+      ? { ...item, privateKeyPath: path } : item) });
+  await Promise.allSettled([
+    emitProtocolEventTo("main", "configuration:changed"),
+    emitProtocolEventTo("settings", "configuration:changed"),
+  ]);
+  await requestHostSync({ manual: true });
 }
 
 export interface HostSyncStatus {
   state: "working" | "success" | "failed";
   time?: string;
   message?: string;
-  conflict?: boolean;
+  conflicts?: HostSyncConflict[];
+  snapshot?: string;
+  blocked?: BlockedSyncRecord[];
+  recoverable?: boolean;
   signInRequired?: boolean;
 }
 
@@ -65,6 +116,7 @@ export async function signInToHostSync(values: {
   password: string;
   recoveryKey: string;
   register: boolean;
+  deviceName: string;
 }) {
   const boundAccount = localStorage.getItem(bindingKey);
   const account = await invoke<HostSyncAccount>("host_sync_login", {
@@ -72,7 +124,7 @@ export async function signInToHostSync(values: {
     boundAccount,
   });
   localStorage.setItem(bindingKey, account.accountId);
-  void requestHostSync().catch(() => undefined);
+  void requestHostSync({ manual: true }).catch(() => undefined);
   return account;
 }
 
@@ -94,8 +146,8 @@ export function hostSyncIsBound() {
   return localStorage.getItem(bindingKey) !== null;
 }
 
-export function requestHostSync(keepLocal?: boolean) {
-  return emitProtocolEventTo("main", "host-sync:request", { keepLocal });
+export function requestHostSync(options: SyncOptions = {}) {
+  return emitProtocolEventTo("main", "host-sync:request", options);
 }
 
 function project(config: FineShellConfiguration): HostSyncConfiguration {
@@ -136,18 +188,23 @@ function writeStatus(status: HostSyncStatus) {
   localStorage.setItem(statusKey, JSON.stringify(status));
 }
 
-async function synchronize(account: HostSyncAccount, keepLocal?: boolean) {
+async function synchronize(account: HostSyncAccount, options: SyncOptions): Promise<HostSyncStatus> {
   const current = await loadConfiguration();
   const configuration = project(current);
   const expected = JSON.stringify(configuration);
-  const { base, expectedLocal } = await invoke<SyncResult>("host_sync_exchange", {
+  const { base, expectedLocal, conflicts, conflictSnapshot, blocked } = await invoke<SyncResult>("host_sync_exchange", {
     accountId: account.accountId,
     configuration,
     base: current.hostSyncBase ? JSON.parse(current.hostSyncBase) : null,
-    keepLocal: keepLocal ?? null,
+    resolution: options.resolution,
+    recover: options.recover,
   });
+  if (conflicts?.length && conflictSnapshot) {
+    return { state: "failed", conflicts, snapshot: conflictSnapshot, blocked };
+  }
+  const status: HostSyncStatus = { state: "success", time: new Date().toISOString(), blocked };
   const encoded = JSON.stringify(base);
-  if (encoded === current.hostSyncBase && !expectedLocal) return;
+  if (encoded === current.hostSyncBase && !expectedLocal) return status;
 
   let received: AppliedConfiguration | undefined;
   if (expectedLocal) {
@@ -159,6 +216,8 @@ async function synchronize(account: HostSyncAccount, keepLocal?: boolean) {
       vault: base,
       expectedLocal,
       configuration,
+      preserveHosts: blocked?.filter((issue) => issue.kind === "hosts" && issue.preserve).map((issue) => issue.id) ?? [],
+      preserveKeys: blocked?.filter((issue) => issue.kind === "keys" && issue.preserve).map((issue) => issue.id) ?? [],
     });
   }
   let changed = false;
@@ -168,7 +227,10 @@ async function synchronize(account: HostSyncAccount, keepLocal?: boolean) {
     committed = true;
     if (!received) return { ...latest, hostSyncBase: encoded };
     const local = new Map(latest.hosts.map((host) => [host.id, host]));
-    const receivedIds = new Set(received.hosts.map((host) => host.id));
+    const retained = new Set(blocked?.filter((issue) => issue.kind === "hosts" && issue.preserve)
+      .map((issue) => issue.id));
+    const incomingHosts = [...received.hosts, ...latest.hosts.filter((host) => retained.has(host.id))];
+    const receivedIds = new Set(incomingHosts.map((host) => host.id));
     const deleted = latest.hosts
       .filter((host) => !receivedIds.has(host.id))
       .map((host) => createDeletedHostRecord(host));
@@ -187,7 +249,7 @@ async function synchronize(account: HostSyncAccount, keepLocal?: boolean) {
     changed = true;
     return {
       ...latest,
-      hosts: mergeOrder(latest.hosts, received.hosts, false)
+      hosts: mergeOrder(latest.hosts, incomingHosts, false)
         .map((host) => restoreLocalFields(host, local.get(host.id))),
       sshKeys: mergeOrder(latest.sshKeys, received.keys, true),
       proxies: mergeOrder(latest.proxies, received.proxies, true),
@@ -206,48 +268,65 @@ async function synchronize(account: HostSyncAccount, keepLocal?: boolean) {
       emitProtocolEventTo("settings", "configuration:changed"),
     ]);
   }
+  return status;
 }
 
 export function startHostSync() {
   if (!isTauri()) return;
   let running = false;
-  let queued: { keepLocal?: boolean } | undefined;
+  let queued: SyncOptions | undefined;
+  let lastDeviceUpdate = 0;
+  let deviceAccount: string | undefined;
+  let retries = 0;
+  let retryAfter = 0;
 
-  async function run(keepLocal?: boolean) {
-    if (!hostSyncIsBound()) return;
+  async function run(options: SyncOptions = {}) {
+    if (!hostSyncIsBound() || (!options.manual && Date.now() < retryAfter)) return;
     if (running) {
-      if (keepLocal !== undefined) queued = { keepLocal };
+      if (options.manual) queued = options;
       return;
     }
     running = true;
     try {
       const account = await hostSyncAccount();
       if (!account) return;
-      if (keepLocal !== undefined) writeStatus({ state: "working" });
-      await synchronize(account, keepLocal);
-      writeStatus({ state: "success", time: new Date().toISOString() });
+      const status = readHostSyncStatus();
+      if (!options.manual && (status?.conflicts?.length || status?.recoverable)) return;
+      if (options.manual) writeStatus({ state: "working" });
+      const result = await synchronize(account, options);
+      writeStatus(result);
+      retries = 0;
+      retryAfter = 0;
+      if (result.state === "success" && (deviceAccount !== account.accountId || Date.now() - lastDeviceUpdate >= 60_000)) {
+        deviceAccount = account.accountId;
+        lastDeviceUpdate = Date.now();
+        void invoke("host_sync_devices", { accountId: account.accountId, markSynced: true }).catch(() => undefined);
+      }
+      if (options.recover && result.state === "success") queued ??= { manual: true };
     } catch (error) {
       const message = commandErrorMessage(error);
+      retries = Math.min(retries + 1, 5);
+      retryAfter = Date.now() + 15_000 * 2 ** retries;
       writeStatus({
         state: "failed",
         message,
-        conflict: message.startsWith("同步冲突"),
+        recoverable: message.startsWith("云端快照落后"),
         signInRequired: message.includes("重新登录"),
       });
     } finally {
       running = false;
       if (queued) {
-        const { keepLocal } = queued;
+        const next = queued;
         queued = undefined;
-        void run(keepLocal);
+        void run(next);
       }
     }
   }
 
   void listenProtocolEvent("host-sync:request", ({ payload }) => {
-    void run(payload.keepLocal);
+    void run(payload);
   }).catch((error) => writeStatus({ state: "failed", message: commandErrorMessage(error) }));
-  window.addEventListener("online", () => void run());
+  window.addEventListener("online", () => { retryAfter = 0; void run(); });
   window.setInterval(() => void run(), 15_000);
   void run();
 }

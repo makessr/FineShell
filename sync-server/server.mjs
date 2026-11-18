@@ -96,12 +96,38 @@ export function createSyncServer(databasePath) {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS session_expiration ON sessions(expires_at);
   `);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const columns = new Set(db.prepare("PRAGMA table_info(sessions)").all().map(({ name }) => name));
+    if (!columns.has("device_id")) db.exec("ALTER TABLE sessions ADD COLUMN device_id TEXT");
+    if (!columns.has("device_name")) db.exec("ALTER TABLE sessions ADD COLUMN device_name TEXT");
+    if (!columns.has("last_sync_at")) db.exec("ALTER TABLE sessions ADD COLUMN last_sync_at INTEGER");
+    db.exec(`
+      UPDATE sessions SET device_id = lower(hex(randomblob(16))) WHERE device_id IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS session_device_id ON sessions(device_id);
+      CREATE INDEX IF NOT EXISTS session_account ON sessions(account_id);
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    db.close();
+    throw error;
+  }
   const readAccount = db.prepare("SELECT id, salt, password_hash FROM accounts WHERE email = ?");
   const createAccount = db.prepare("INSERT OR IGNORE INTO accounts (id, email, salt, password_hash) VALUES (?, ?, ?, ?)");
   const readVault = db.prepare("SELECT revision, vault FROM accounts WHERE id = ?");
-  const writeVault = db.prepare("UPDATE accounts SET revision = revision + 1, vault = ? WHERE id = ? AND revision = ?");
-  const readSession = db.prepare("SELECT account_id FROM sessions WHERE token_hash = ? AND expires_at > ?");
-  const createSession = db.prepare("INSERT INTO sessions VALUES (?, ?, ?)");
+  const writeVault = db.prepare("UPDATE accounts SET revision = ?, vault = ? WHERE id = ? AND revision = ?");
+  const readSession = db.prepare("SELECT account_id, device_id FROM sessions WHERE token_hash = ? AND expires_at > ?");
+  const createSession = db.prepare(
+    "INSERT INTO sessions (token_hash,account_id,expires_at,device_id,device_name) VALUES (?,?,?,?,?)",
+  );
+  const listDevices = db.prepare(
+    "SELECT device_id, device_name, last_sync_at, expires_at FROM sessions WHERE account_id = ? AND expires_at > ? ORDER BY last_sync_at DESC, expires_at DESC",
+  );
+  const revokeDevice = db.prepare("DELETE FROM sessions WHERE account_id = ? AND device_id = ?");
+  const recordDeviceSync = db.prepare(
+    "UPDATE sessions SET last_sync_at = ? WHERE token_hash = ? AND (last_sync_at IS NULL OR last_sync_at < ?)",
+  );
   const deleteSession = db.prepare("DELETE FROM sessions WHERE token_hash = ?");
   const pruneSessions = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
   const dummySalt = randomBytes(16);
@@ -109,7 +135,10 @@ export function createSyncServer(databasePath) {
   let deriving = 0;
 
   async function authenticate(request, register) {
-    const { email, password } = credentials(await readJson(request, 4096));
+    const body = await readJson(request, 4096);
+    const { email, password } = credentials(body);
+    const deviceName = typeof body.deviceName === "string"
+      ? body.deviceName.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
     const now = Date.now();
     const recent = (attempts.get(email) ?? []).filter((time) => now - time < 60_000);
     if (recent.length >= 8 || deriving >= 4 || (attempts.size >= 10_000 && !attempts.has(email))) {
@@ -139,7 +168,8 @@ export function createSyncServer(databasePath) {
     }
     pruneSessions.run(now);
     const token = randomBytes(32).toString("base64url");
-    createSession.run(hashToken(token), accountId, now + sessionLifetime);
+    createSession.run(hashToken(token), accountId, now + sessionLifetime,
+      randomBytes(16).toString("hex"), deviceName || "FineShell");
     return { accountId, token };
   }
 
@@ -155,7 +185,10 @@ export function createSyncServer(databasePath) {
         send(response, 200, await authenticate(request, url === "/v1/register"));
         return;
       }
-      if (url !== "/v1/vault" && url !== "/v1/logout") {
+      const isRecovery = url === "/v1/vault/recover" && method === "POST";
+      const deviceRoute = /^\/v1\/devices\/([a-f0-9]{32})$/.exec(url ?? "");
+      if (url !== "/v1/vault" && url !== "/v1/logout" && url !== "/v1/devices" &&
+          url !== "/v1/devices/synced" && !deviceRoute && !isRecovery) {
         throw new HttpError(404, "Not found");
       }
       const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
@@ -165,22 +198,42 @@ export function createSyncServer(databasePath) {
       if (url === "/v1/logout" && method === "POST") {
         deleteSession.run(tokenHash);
         send(response, 200, {});
+      } else if (url === "/v1/devices" && method === "GET") {
+        send(response, 200, listDevices.all(session.account_id, Date.now()).map((item) => ({
+          id: item.device_id, name: item.device_name || "FineShell",
+          current: item.device_id === session.device_id,
+          lastSyncAt: item.last_sync_at, expiresAt: item.expires_at,
+        })));
+      } else if (url === "/v1/devices/synced" && method === "POST") {
+        const now = Date.now();
+        recordDeviceSync.run(now, tokenHash, now - 60_000);
+        send(response, 200, {});
+      } else if (deviceRoute && method === "DELETE") {
+        if (deviceRoute[1] === session.device_id) throw new HttpError(400, "Use logout for this device");
+        if (!revokeDevice.run(session.account_id, deviceRoute[1]).changes) {
+          throw new HttpError(404, "Device not found");
+        }
+        send(response, 200, {});
       } else if (url === "/v1/vault" && method === "GET") {
         const { revision, vault } = readVault.get(session.account_id);
         send(response, 200, { revision, vault: vault && JSON.parse(vault) });
-      } else if (url === "/v1/vault" && method === "PUT") {
-        const { revision, vault } = await readJson(request, maxVaultBytes);
+      } else if ((url === "/v1/vault" && method === "PUT") || isRecovery) {
+        const { revision, vault, nextRevision } = await readJson(request, maxVaultBytes);
         if (!Number.isSafeInteger(revision) || revision < 0) {
           throw new HttpError(400, "Invalid vault revision");
+        }
+        const next = isRecovery ? nextRevision : revision + 1;
+        if (!Number.isSafeInteger(next) || next <= revision || (isRecovery && next === revision + 1)) {
+          throw new HttpError(400, "Invalid next vault revision");
         }
         const encrypted = validateVault(vault);
         if (!readSession.get(tokenHash, Date.now())) {
           throw new HttpError(401, "Sign in again");
         }
-        if (!writeVault.run(JSON.stringify(encrypted), session.account_id, revision).changes) {
+        if (!writeVault.run(next, JSON.stringify(encrypted), session.account_id, revision).changes) {
           throw new HttpError(409, "Vault changed. Read the current revision and try again");
         }
-        send(response, 200, { revision: revision + 1 });
+        send(response, 200, { revision: next });
       } else {
         throw new HttpError(405, "Method not allowed");
       }

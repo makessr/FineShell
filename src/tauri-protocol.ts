@@ -403,7 +403,7 @@ interface EventPayloadMap {
   "ai-complete": AiCompletePayload;
   "ai-task": AgentTaskEventPayload;
   "configuration:changed": undefined;
-  "host-sync:request": { keepLocal?: boolean };
+  "host-sync:request": { resolution?: { snapshot: string; choices: Record<string, boolean> }; recover?: boolean; manual?: boolean };
   "settings:changed": AppSettings;
   "menu-select-all": MenuSelectAllPayload;
 }
