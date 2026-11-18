@@ -73,6 +73,42 @@ pub(crate) fn resolve_reference(reference: &str) -> Result<Option<PathBuf>, Stri
     Ok(Some(key_path(managed_key_root()?, key_id)))
 }
 
+pub(crate) fn read_sync_key(reference: &str) -> Result<String, String> {
+    use std::io::Read;
+
+    let path = resolve_private_key_path(reference)?;
+    let file = fs::File::open(path).map_err(|_| "无法读取待同步的 SSH 私钥".to_string())?;
+    if !file.metadata().map_err(|_| "无法检查 SSH 私钥")?.is_file() {
+        return Err("SSH 私钥必须是普通文件".to_string());
+    }
+    let mut contents = String::new();
+    file.take(MAX_PRIVATE_KEY_BYTES as u64 + 1)
+        .read_to_string(&mut contents)
+        .map_err(|_| "无法读取待同步的 SSH 私钥".to_string())?;
+    validate_private_key(&contents).map(|(normalized, _)| normalized)
+}
+
+pub(crate) fn install_sync_key(key_id: &str, contents: &str) -> Result<String, String> {
+    validate_key_id(key_id)?;
+    let root = managed_key_root()?;
+    let reference = format!("{MANAGED_KEY_PREFIX}{key_id}");
+    write_private_key(root, key_id, contents, true)?;
+    Ok(reference)
+}
+
+pub(crate) fn resolve_private_key_path(path: &str) -> Result<PathBuf, String> {
+    if let Some(path) = resolve_reference(path)? {
+        return Ok(path);
+    }
+    let Some(relative) = path.strip_prefix("~/") else {
+        return Ok(PathBuf::from(path));
+    };
+    Ok(std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(relative))
+        .unwrap_or_else(|| PathBuf::from(path)))
+}
+
 fn managed_key_root() -> Result<&'static Path, String> {
     MANAGED_KEY_ROOT
         .get()
@@ -182,12 +218,16 @@ fn validate_private_key(private_key: &str) -> Result<(String, &'static str), Str
 }
 
 fn import_private_key(root: &Path, key_id: &str, private_key: &str) -> Result<String, String> {
+    write_private_key(root, key_id, private_key, false)
+}
+
+fn write_private_key(root: &Path, key_id: &str, private_key: &str, replace: bool) -> Result<String, String> {
     validate_key_id(key_id)?;
     let (normalized, key_type) = validate_private_key(private_key)?;
     prepare_directory(root)?;
 
     let target = key_path(root, key_id);
-    if target.exists() {
+    if !replace && target.exists() {
         return Err("同名托管密钥已经存在".to_string());
     }
 
@@ -212,6 +252,12 @@ fn import_private_key(root: &Path, key_id: &str, private_key: &str) -> Result<St
         file.sync_all()
             .map_err(|error| format!("无法同步托管密钥：{error}"))?;
         drop(file);
+
+        if replace {
+            fs::rename(&temporary, &target)
+                .map_err(|error| format!("无法保存同步私钥：{error}"))?;
+            return Ok(key_type.to_string());
+        }
 
         if target.exists() {
             return Err("同名托管密钥已经存在".to_string());

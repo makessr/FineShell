@@ -1,7 +1,13 @@
 {
-  "version": 36,
+  "version": 37,
   "commands": {
     "protocol_version": true,
+    "host_sync_account": true,
+    "host_sync_recovery_key": true,
+    "host_sync_login": true,
+    "host_sync_logout": true,
+    "host_sync_exchange": true,
+    "host_sync_apply": true,
     "open_settings_window": true,
     "open_shortcut_guide_window": true,
     "application_update_check": true,
@@ -117,6 +123,7 @@
     "ai-complete": true,
     "ai-task": true,
     "configuration:changed": true,
+    "host-sync:request": true,
     "settings:changed": true,
     "menu-select-all": true
   },

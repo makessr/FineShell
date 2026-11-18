@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FineShell",
-  "version": "0.1.25",
+  "version": "0.2.0",
   "identifier": "com.fineshell.app",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -42,9 +42,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERCNjFDQ0VGNzRBMzZDQTUKUldTbGJLTjA3OHhoMjFNcjM4SHBGc1J3ZThJdC9LU3poMHFJV2g2aDR0ZmlEdHRZMzlrQUdTbisK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdEOEFEMUZEQzgyNjc5REUKUldUZWVTYkkvZEdLZlZRd2h5S3g5VGtMei91ZDIxT3RiYW5Ua1Nabmg2Q0xnUnVlVklDUWt2djQK",
       "endpoints": [
-        "https://github.com/Max0897/fineshell/releases/latest/download/latest.json"
+        "https://github.com/makessr/FineShell/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

@@ -92,6 +92,7 @@ export interface FineShellConfiguration {
   credentialReferences: CredentialReferenceRecord[];
   backups: ConfigurationBackup[];
   trash: DeletedHostRecord[];
+  hostSyncBase?: string;
   updatedAt: string;
 }
 
@@ -645,6 +646,7 @@ function normalizeConfiguration(value: unknown): FineShellConfiguration {
       MAX_CONFIGURATION_BACKUPS,
     ),
     trash: sanitizeList(value.trash, sanitizeDeletedHost),
+    ...(typeof value.hostSyncBase === "string" ? { hostSyncBase: value.hostSyncBase } : {}),
     updatedAt,
   };
 }

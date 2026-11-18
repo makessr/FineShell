@@ -1,0 +1,22 @@
+[Unit]
+Description=FineShell account sync
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=fineshell-sync
+StateDirectoryMode=0700
+Environment=FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite
+Environment=FINESHELL_SYNC_PORT=8787
+ExecStart=/opt/fineshell-sync/node/bin/node /opt/fineshell-sync/server.mjs
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

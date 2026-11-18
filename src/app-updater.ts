@@ -9,7 +9,7 @@ import { loadConfiguration } from "./config-database";
 import { invokeProtocolCommand } from "./tauri-protocol";
 
 export const FINESHELL_REPOSITORY_URL =
-  "https://github.com/Max0897/fineshell";
+  "https://github.com/makessr/FineShell";
 export const FINESHELL_LICENSE_URL = `${FINESHELL_REPOSITORY_URL}/blob/main/LICENSE`;
 const APPLICATION_UPDATE_NOTICE_KEY = "fineshell:application-update";
 const APPLICATION_UPDATE_NOTICE_EVENT = "fineshell:application-update-changed";

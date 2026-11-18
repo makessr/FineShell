@@ -13,6 +13,7 @@ mod credentials;
 mod diagnostics;
 mod dynamic_forward;
 mod external_edit;
+mod host_sync;
 mod local_files;
 mod managed_keys;
 mod monitor;
@@ -33,19 +34,17 @@ pub fn run() {
         file_name: Some("fineshell".into()),
     })
     .filter(|metadata| metadata.target().starts_with("fineshell"));
-    let mut log_builder = tauri_plugin_log::Builder::new()
+    let log_builder = tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(log_target)
         .level(log::LevelFilter::Trace)
         .max_file_size(2 * 1024 * 1024)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5));
     #[cfg(debug_assertions)]
-    {
-        log_builder = log_builder.target(
-            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout)
-                .filter(|metadata| metadata.target().starts_with("fineshell")),
-        );
-    }
+    let log_builder = log_builder.target(
+        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout)
+            .filter(|metadata| metadata.target().starts_with("fineshell")),
+    );
 
     let builder = tauri::Builder::default()
         .manage(ai::AiRequestManager::default())
@@ -84,6 +83,12 @@ pub fn run() {
 
     let app = builder
         .invoke_handler(tauri::generate_handler![
+            host_sync::host_sync_account,
+            host_sync::host_sync_recovery_key,
+            host_sync::host_sync_login,
+            host_sync::host_sync_logout,
+            host_sync::host_sync_exchange,
+            host_sync::host_sync_apply,
             protocol::protocol_version,
             #[cfg(desktop)]
             native_menu::open_settings_window,

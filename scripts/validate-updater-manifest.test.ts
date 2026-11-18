@@ -11,6 +11,19 @@ function manifest(platforms: Record<string, unknown>) {
 }
 
 describe("updater manifest validation", () => {
+  test("requires both Windows architectures for a Windows-only release", () => {
+    const windows = manifest({
+      "windows-x86_64-nsis": platform,
+      "windows-aarch64-nsis": platform,
+    });
+    expect(validateUpdaterManifest(windows, "v1.2.3", "windows")).toEqual([
+      "windows-x86_64-nsis", "windows-aarch64-nsis",
+    ]);
+    expect(() => validateUpdaterManifest(
+      manifest({ "windows-x86_64-nsis": platform }), "v1.2.3", "windows",
+    )).toThrow("缺少 Windows ARM64");
+  });
+
   test("accepts a complete cross-platform manifest", () => {
     expect(
       validateUpdaterManifest(
