@@ -34,19 +34,17 @@ pub fn run() {
         file_name: Some("fineshell".into()),
     })
     .filter(|metadata| metadata.target().starts_with("fineshell"));
-    let mut log_builder = tauri_plugin_log::Builder::new()
+    let log_builder = tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(log_target)
         .level(log::LevelFilter::Trace)
         .max_file_size(2 * 1024 * 1024)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5));
     #[cfg(debug_assertions)]
-    {
-        log_builder = log_builder.target(
-            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout)
-                .filter(|metadata| metadata.target().starts_with("fineshell")),
-        );
-    }
+    let log_builder = log_builder.target(
+        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout)
+            .filter(|metadata| metadata.target().starts_with("fineshell")),
+    );
 
     let builder = tauri::Builder::default()
         .manage(ai::AiRequestManager::default())

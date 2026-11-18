@@ -35,6 +35,8 @@ describe("application updater helpers", () => {
   });
 
   test("persists and broadcasts the available update notice", () => {
+    const [major, minor] = packageMetadata.version.split(".");
+    const nextVersion = `${major}.${Number(minor) + 1}.0`;
     const notices: (string | undefined)[] = [];
     const unlisten = listenApplicationUpdateNotice((notice) => {
       notices.push(notice?.version);
@@ -44,17 +46,17 @@ describe("application updater helpers", () => {
       body: "### 新增\n\n- 更新说明",
       currentVersion: packageMetadata.version,
       date: "2026-07-25T00:00:00Z",
-      version: "0.2.0",
+      version: nextVersion,
     });
     expect(readApplicationUpdateNotice()).toEqual({
       body: "### 新增\n\n- 更新说明",
       currentVersion: packageMetadata.version,
       date: "2026-07-25T00:00:00Z",
-      version: "0.2.0",
+      version: nextVersion,
     });
     setApplicationUpdateNotice(null);
     expect(readApplicationUpdateNotice()).toBeNull();
-    expect(notices).toEqual(["0.2.0", undefined]);
+    expect(notices).toEqual([nextVersion, undefined]);
 
     unlisten();
   });
