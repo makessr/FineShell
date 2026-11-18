@@ -103,14 +103,17 @@ export default function HostSyncSettings() {
     }
   }
 
-  function describe(record: Record<string, unknown> | null) {
+  function describe(record: Record<string, unknown> | null, other: Record<string, unknown> | null) {
     if (!record) return "已删除";
-    const fields = Object.entries(record)
-      .filter(([key, value]) => key !== "id" && key !== "name" && value != null);
+    const keys = new Set([...Object.keys(record), ...Object.keys(other ?? {})]);
+    const fields = [...keys]
+      .filter((key) => key !== "id" && key !== "name" &&
+        JSON.stringify(record[key]) !== JSON.stringify(other?.[key]))
+      .map((key) => [key, record[key] ?? null]);
     return <div>
       {String(record.name ?? "")}
       {fields.length > 0 && <details>
-        <summary>查看配置</summary>
+        <summary>查看配置差异</summary>
         <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(Object.fromEntries(fields), null, 2)}</pre>
       </details>}
     </div>;
@@ -208,7 +211,7 @@ export default function HostSyncSettings() {
                       />
                       {side === "local" ? "保留本机版本" : "保留云端版本"}
                     </label>
-                    {describe(conflict[side])}
+                    {describe(conflict[side], conflict[side === "local" ? "cloud" : "local"])}
                   </div>
                 ))}
               </fieldset>

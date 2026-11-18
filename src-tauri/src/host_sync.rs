@@ -813,6 +813,24 @@ mod tests {
     }
 
     #[test]
+    fn resolves_conflicts_per_record() {
+        let version = |name: &str| {
+            let (_, mut other) = host(name);
+            other.metadata["id"] = json!("another");
+            BTreeMap::from([host(name), ("another".into(), other)])
+        };
+        let choices = BTreeMap::from([("hosts/host".into(), true), ("hosts/another".into(), false)]);
+        let mut conflicts = Vec::new();
+        let result = merge_map(
+            &version("base"), version("local"), &version("cloud"), "hosts",
+            Some(&choices), &mut conflicts,
+        );
+        assert!(conflicts.is_empty());
+        assert_eq!(result["host"].metadata["name"], "local");
+        assert_eq!(result["another"].metadata["name"], "cloud");
+    }
+
+    #[test]
     fn missing_keys_defer_only_records_that_need_them() {
         let (_, mut blocked_host) = host("blocked");
         blocked_host.metadata["sshKeyId"] = json!("missing");

@@ -291,7 +291,7 @@ export function startHostSync() {
       const account = await hostSyncAccount();
       if (!account) return;
       const status = readHostSyncStatus();
-      if (!options.manual && (status?.conflicts?.length || status?.recoverable)) return;
+      if (!options.manual && status?.conflicts?.length) return;
       if (options.manual) writeStatus({ state: "working" });
       const result = await synchronize(account, options);
       writeStatus(result);
