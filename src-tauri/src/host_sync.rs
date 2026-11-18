@@ -467,8 +467,10 @@ fn merge_map(
                 id: conflict_id,
                 local: here.map(|record| record.metadata.clone()),
                 cloud: there.map(|record| record.metadata.clone()),
-                credential_changed: here.map(|record| (&record.secret, &record.private_key))
-                    != there.map(|record| (&record.secret, &record.private_key)),
+                credential_changed: here.and_then(|record| record.secret.as_ref())
+                    != there.and_then(|record| record.secret.as_ref())
+                    || here.and_then(|record| record.private_key.as_ref())
+                        != there.and_then(|record| record.private_key.as_ref()),
             });
             continue;
         };
