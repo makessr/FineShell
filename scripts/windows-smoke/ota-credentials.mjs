@@ -82,9 +82,12 @@ async function startSignedMirror(configPath) {
   const downloadUrl = source + "/download/v" + target + "/FineShell-bridge.exe";
   const platform = { url: downloadUrl, signature: (await readFile(signature, "utf8")).trim() };
   assert.ok(platform.signature);
+  const architecture = { x64: "x86_64", arm64: "aarch64" }[process.arch];
+  assert.ok(architecture, "Unsupported Windows updater architecture");
+  const platformKey = "windows-" + architecture;
   const manifest = JSON.stringify({
     version: target,
-    platforms: { "windows-x86_64": platform, "windows-x86_64-nsis": platform },
+    platforms: { [platformKey]: platform, [platformKey + "-nsis"]: platform },
   });
   const size = (await stat(installer)).size;
   const counts = { manifest: 0, installer: 0 };
