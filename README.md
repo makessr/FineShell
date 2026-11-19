@@ -137,10 +137,12 @@ v0.5.0 公开前，macOS 和 Linux 可从本仓库源码构建。macOS 下载包
 
 ```bash
 sudo apt update
-sudo apt install ./FineShell_0.5.0_linux_arm64.deb
+sudo apt install ./FineShell_0.5.1_linux_arm64.deb
 ```
 
 请根据实际下载的文件名调整命令。不要直接使用 `dpkg -i`，因为 `dpkg` 不会自动下载缺失的依赖。
+
+Linux ARM64 启动验收在独立的 Ubuntu ARM64 运行器上通过 APT 安装正式 DEB，并检查客户端能否打开桌面窗口。
 
 如果已经使用 `dpkg -i` 导致软件包处于未配置状态，可执行：
 

@@ -1,0 +1,68 @@
+name: Linux ARM64 v0.5.1 startup acceptance
+
+on:
+  push:
+    branches: [test/linux-arm64-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 12
+    steps:
+      - name: Download and verify the official ARM64 package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          package=FineShell_0.5.1_linux_arm64.deb
+          gh release download v0.5.1 --repo "$GITHUB_REPOSITORY" --pattern "$package"
+          printf '%s  %s\n' '6c2cb8883983064f1fb38bf26941520493191557b7214a3cacd8150c627f891b' "$package" | sha256sum --check
+          test "$(uname -m)" = aarch64
+          test "$(dpkg --print-architecture)" = arm64
+          test "$(dpkg-deb -f "$package" Architecture)" = arm64
+          test "$(dpkg-deb -f "$package" Version)" = 0.5.1
+          dpkg-deb -f "$package" Package Version Architecture Depends
+      - name: Install the package and its dependencies using APT
+        run: |
+          set -Eeuo pipefail
+          package="$RUNNER_TEMP/FineShell_0.5.1_linux_arm64.deb"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends "$package" xvfb xauth xdotool x11-utils dbus-x11
+          package_name="$(dpkg-deb -f "$package" Package)"
+          test "$(dpkg-query -W -f='${Status}' "$package_name")" = 'install ok installed'
+          test "$(dpkg-query -W -f='${Version}' "$package_name")" = 0.5.1
+          dpkg-query -S /usr/bin/fineshell
+          LC_ALL=C readelf -h /usr/bin/fineshell | grep -E 'Machine:.*AArch64'
+      - name: Start FineShell and verify its visible X11 window
+        run: |
+          set -Eeuo pipefail
+          xvfb-run -a -s '-screen 0 1440x1000x24' dbus-run-session -- bash -s <<'BASH'
+          set -Eeuo pipefail
+          export GDK_BACKEND=x11
+          /usr/bin/fineshell > "$RUNNER_TEMP/fineshell-startup.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+
+          for ((attempt=0; attempt<45; attempt++)); do
+              if ! kill -0 "$app_pid" 2>/dev/null; then
+                  break
+              fi
+              if window="$(xdotool search --onlyvisible --all --pid "$app_pid" --name 'FineShell' | head -n 1)" &&
+                 [[ -n "$window" ]]; then
+                  xwininfo -id "$window" | grep -F 'Map State: IsViewable'
+                  sleep 3
+                  kill -0 "$app_pid"
+                  printf 'FineShell v0.5.1 started on native ARM64 and opened a visible window: %s\n' "$(xdotool getwindowname "$window")"
+                  exit 0
+              fi
+              sleep 1
+          done
+
+          tail -n 60 "$RUNNER_TEMP/fineshell-startup.log" >&2
+          printf '%s\n' 'FineShell did not open a visible window.' >&2
+          exit 1
+          BASH
