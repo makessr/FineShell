@@ -1,60 +1,132 @@
 # FineShell 主机同步服务
 
-同步服务运行在你控制的服务器上。桌面应用用邮箱和账号密码登录，使用独立生成的恢复密钥在设备端加解密 SSH 数据。SQLite 保存账号、登录会话和加密后的同步数据。请同样保护并备份 SQLite 数据库。
+FineShell 桌面端通过 HTTPS 登录同步服务。服务端用 SQLite 保存账号、登录会话和加密后的主机数据，SSH 凭据在设备端用恢复密钥解锁。
 
-## Windows 或本机开发
+## 选择部署方式
 
-使用 Node.js 26。在项目根目录安装服务依赖并启动：
+| 场景 | 从哪里开始 |
+| --- | --- |
+| Linux 服务器已有宝塔和 Nginx | [systemd](#systemd)，再配置[宝塔 Nginx 和 Cloudflare](#宝塔-nginx-和-cloudflare) |
+| Linux 服务器主要用容器 | [Docker Compose](#docker-compose)，再配置同机 HTTPS 反向代理 |
+| 服务已经上线，只更新程序 | [升级已有服务](#升级已有服务) |
+| 只在本机试用 | [Windows 或本机开发](#windows-或本机开发) |
 
-```powershell
-npm ci --prefix sync-server --omit=dev --ignore-scripts
-$env:FINESHELL_SYNC_DATABASE = "C:\data\fineshell-sync.sqlite"
-$env:FINESHELL_SYNC_PORT = "8787"
-node sync-server/server.mjs
-```
-
-数据库目录需提前创建。服务监听本机的 `127.0.0.1:8787`。本机开发时，在桌面应用的「设置 → 主机同步」填写 `http://127.0.0.1:8787`。跨设备使用时，通过 HTTPS 反向代理访问该端口。发布前设置 `VITE_FINESHELL_SYNC_URL` 可为桌面应用预填服务地址。
+两种 Linux 安装方式选一种，都使用宿主机回环地址 `127.0.0.1:8787`。外部客户端访问域名的 HTTPS 端口，由同机 Nginx 转发到同步服务。下面用 `sync.example.com` 举例，配置时换成自己的同步域名。
 
 ## Linux 部署
 
-### Docker Compose
-
-从 `sync-server` 目录执行。容器以普通用户运行，数据库保存在命名卷 `vault`，宿主机只监听回环地址。
-
-```bash
-docker compose up -d --build
-curl --fail http://127.0.0.1:8787/healthz
-```
-
-配置发信时在 `sync-server` 目录创建权限为 `0600` 的 `.env`，可参考 [配置示例](deploy/sync.env.example)。升级前备份命名卷中的数据库，更新源码后再次运行 `docker compose up -d --build`。保留现有命名卷。
-
 ### systemd
 
-先安装 Node.js 26。以下步骤采用与 [服务单元](deploy/fineshell-sync.service) 一致的路径，Node.js 安装于 `/opt/fineshell-sync/node`。如果使用系统提供的 Node.js，则相应修改单元里的 `ExecStart`。从仓库根目录执行：
+1. 安装 Node.js 26，确认 `/opt/fineshell-sync/node/bin/node --version` 显示 `v26.x`，同一目录下也应有 `npm`。如果使用系统安装的 Node.js，请用 `command -v node` 和 `command -v npm` 查到实际路径，相应调整下面的命令以及 [systemd 服务单元](deploy/fineshell-sync.service) 的 `ExecStart`。
+2. 从 FineShell 仓库根目录执行下面的命令。首次安装会从示例创建配置文件，已有配置会保留。
 
 ```bash
 sudo install -d -m 0755 /opt/fineshell-sync
 sudo install -d -m 0700 /etc/fineshell-sync
-sudo install -m 0644 sync-server/server.mjs sync-server/onboarding.mjs sync-server/package.json sync-server/package-lock.json /opt/fineshell-sync/
-sudo install -m 0644 sync-server/deploy/{backup-snapshot,portable-backup}.mjs /opt/fineshell-sync/
-sudo env PATH=/opt/fineshell-sync/node/bin:/usr/bin:/bin /opt/fineshell-sync/node/bin/npm ci --prefix /opt/fineshell-sync --omit=dev --ignore-scripts
+sudo install -m 0644 sync-server/server.mjs sync-server/onboarding.mjs \
+  sync-server/package.json sync-server/package-lock.json /opt/fineshell-sync/
+sudo install -m 0644 sync-server/deploy/backup-snapshot.mjs \
+  sync-server/deploy/portable-backup.mjs /opt/fineshell-sync/
+sudo test -e /etc/fineshell-sync/sync.env ||
+  sudo install -m 0600 sync-server/deploy/sync.env.example /etc/fineshell-sync/sync.env
+sudo env PATH=/opt/fineshell-sync/node/bin:/usr/bin:/bin \
+  /opt/fineshell-sync/node/bin/npm ci --prefix /opt/fineshell-sync --omit=dev --ignore-scripts
 sudo install -m 0644 sync-server/deploy/fineshell-sync.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now fineshell-sync
-curl --fail http://127.0.0.1:8787/healthz
 ```
 
-systemd 管理 `/var/lib/fineshell-sync`，重启和升级保留数据。发信配置放在 `/etc/fineshell-sync/sync.env`，仅允许 root 读取。升级前创建快照，更新程序文件和依赖后执行 `sudo systemctl restart fineshell-sync`，通过 `journalctl -u fineshell-sync` 和 `/healthz` 核对。
+3. 编辑 `/etc/fineshell-sync/sync.env`，根据[注册与邮件配置](#注册与邮件配置)选择注册模式。自用且暂时不创建账号时可设为 `closed`。首次建号可在开放注册期间完成，之后再改为 `closed`。文件保持 root 专用的 `0600` 权限。
+4. 启动服务并确认本机探针返回 `{"service":"fineshell-sync","status":"ok"}`。systemd 会管理数据库目录，默认数据库位于 `/var/lib/fineshell-sync/vault.sqlite`。
 
-两种方式都可以在本机前置 Nginx 或其他反向代理终止 HTTPS。代理到 `127.0.0.1:8787`，转发 `Authorization`，请求体上限至少为 8 MiB。跨设备客户端填写 HTTPS 域名。
+```bash
+sudo systemctl enable --now fineshell-sync
+curl -fsS http://127.0.0.1:8787/healthz
+```
 
-登录、注册和验证码接口同时使用来源限流。systemd 直连回环反向代理部署可让 Nginx 覆盖 `X-Real-IP`（`proxy_set_header X-Real-IP $remote_addr;`），然后在服务端配置增加 `FINESHELL_SYNC_TRUST_LOOPBACK_PROXY=1`。只有来自回环的连接才能使用这个头。服务日志记录异常注册及限流的汇总数量，包含 `FineShell authentication activity` 的条目可接入告警。
+### Docker Compose
 
-## 邀请注册与邮箱验证
+从仓库的 `sync-server` 目录执行。创建或编辑权限为 `0600` 的 `.env`，字段见[配置示例](deploy/sync.env.example)。容器以普通用户运行，数据库位于容器内的 `/data/vault.sqlite`，由命名卷 `vault` 保存。
 
-默认模式 `open` 支持自助注册。将 `FINESHELL_SYNC_REGISTRATION` 设为 `closed` 可以关闭新注册，已有账号仍可登录。启用邀请制时，将服务端配置中的 `FINESHELL_SYNC_REGISTRATION` 设为 `invite`。现有账号可以继续登录。新账号需要管理员分发的邀请码和验证码。邀请码绑定邮箱、七天有效，注册成功后即失效。邮箱验证码有效期为 15 分钟。
+```bash
+cd sync-server
+(umask 077; set -C; [ -e .env ] || cat deploy/sync.env.example > .env)
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:8787/healthz
+```
 
-可使用自建 SMTP 或 Resend 发信。SMTP 465 使用隐式 TLS，SMTP 587 使用强制 STARTTLS，两种方式都验证证书。
+以后从同一目录和同一 Compose 项目维护服务，以便继续使用原来的数据卷。
+
+## 宝塔 Nginx 和 Cloudflare
+
+1. **DNS**。在 Cloudflare 的 DNS 记录里添加 `A` 记录。若区域是 `example.com`，名称填 `sync`，IPv4 地址填 Linux 服务器公网地址。首次调通时可以选「仅 DNS（灰云）」，先直接验证宝塔的 HTTPS。如果已有指向该站点的记录，检查并使用现有记录。 [Cloudflare DNS 代理状态](https://developers.cloudflare.com/dns/proxy-status/)
+2. **宝塔站点和证书**。在「网站」中打开该域名的站点，或为它创建一个 Nginx 站点。在站点的 SSL 设置中部署覆盖此域名的证书。灰云模式下，使用客户端信任的证书，例如 Let’s Encrypt。服务器对外提供 HTTPS 443，宝塔使用 HTTP 验证证书时还需开放 80 并保留验证路径。 [宝塔官方反向代理文档](https://docs.bt.cn/user-guide/site/php/site-config/reverse-proxy)
+3. **配置反向代理**。在该站点的 HTTPS `server { ... }` 内添加下面两个 `location`，也可放进站点已有的扩展配置文件。如果宝塔已生成同一路径的规则，编辑原规则。保留现有证书、证书续期路径和其他站点配置。
+
+```nginx
+location = /healthz {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_cache off;
+}
+
+location ^~ /v1/ {
+    client_max_body_size 8m;
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_cache off;
+}
+```
+
+`proxy_pass` 的端口后保持无路径，Nginx 会将 `/v1/...` 原样转发。用宝塔所管理的 Nginx 执行 `nginx -t`，语法检查通过后重载。 [Nginx 反向代理指令](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+
+4. **可选的 Cloudflare 代理**。源站 HTTPS 验证通过后，可把 DNS 记录切到「已代理（橙云）」，并为该域名使用 `Full (strict)`。该模式需要源站 443 可达，且证书未过期、域名匹配，签发方为受信任的 CA 或 Cloudflare Origin CA。若已有全站缓存规则，为同步域名的 `/v1/*` 和 `/healthz` 配置绕过缓存。 [Cloudflare Full (strict)](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/)
+
+### 客户端来源限流
+
+systemd 部署中，若 Nginx 通过回环连接服务，且使用上面的配置覆盖 `X-Real-IP`，可以在 `sync.env` 加上 `FINESHELL_SYNC_TRUST_LOOPBACK_PROXY=1` 并重启。仅 DNS 时，Nginx 的 `$remote_addr` 可直接用于来源限流。
+
+开启 Cloudflare 代理后，Nginx 默认看到的是 Cloudflare 节点 IP。需要按访客 IP 限流时，先按 Cloudflare 的 Nginx 指南配置 `real_ip_header CF-Connecting-IP`，并用 `set_real_ip_from` 限定为 Cloudflare 官方地址段，验证后继续由 Nginx 将 `$remote_addr` 写入 `X-Real-IP`。Compose 使用桥接网络并发布宿主机的回环端口，容器收到的连接未必来自回环，保持 Compose 的默认设置即可。 [Cloudflare 恢复客户端 IP 指南](https://developers.cloudflare.com/support/troubleshooting/restoring-visitor-ips/restoring-original-visitor-ips/)
+
+### 上线验证与排错
+
+先在服务器上检查本机服务，再从另一台设备检查公开地址。把下面的域名换成你自己的域名。
+
+```bash
+curl -fsS http://127.0.0.1:8787/healthz
+curl -fsS https://sync.example.com/healthz
+curl -fsS https://sync.example.com/v1/registration
+curl -sS -o /dev/null -w '%{http_code}\n' https://sync.example.com/v1/vault
+```
+
+预期两次健康检查都返回 `status: ok`，注册接口返回 `open`、`invite` 或 `closed`，匿名访问仓库返回 `401`。桌面端在「设置 → 主机同步」填写 `https://sync.example.com`，域名后留空。
+
+| 现象 | 优先检查 |
+| --- | --- |
+| 本机 8787 无法连接 | systemd 用 `sudo journalctl -u fineshell-sync -n 50 --no-pager`，Compose 用 `docker compose logs --tail 50 sync` |
+| 本机正常，公网返回 `404` 或 `502` | 确认请求命中正确的 HTTPS 站点、代理路径和目标 `127.0.0.1:8787` |
+| Cloudflare 返回 `526` | 核对宝塔源站证书的有效期、域名与证书链 |
+| 同步返回 `413` | 检查 Nginx 的 `client_max_body_size`；服务自身接受的同步请求体上限是 8 MiB |
+| 多个人同时登录遇到 `429` | 检查 Nginx 是否识别真实访客 IP，并查看日志中的 `FineShell authentication activity` |
+
+## 升级已有服务
+
+- **systemd**。记录当前部署的源码版本，先做[在线快照](#异机备份与恢复)。从新的源码版本重新执行 [systemd 安装](#systemd)第 2 步，把程序和依赖更新到同一版本。如果修改过单元文件，安装前先合并本地调整。保留 `/etc/fineshell-sync/sync.env` 和 SQLite 数据。执行 `sudo systemctl restart fineshell-sync`，按[上线验证](#上线验证与排错)检查本机和公网。
+- **Docker Compose**。先备份现有数据卷中的数据库。从原 Compose 目录更新源码并运行 `docker compose up -d --build`。保留原项目名、`.env` 和现有命名卷，再检查服务日志和健康探针。
+
+升级失败时，先查看服务日志。如果确认上一版程序兼容当前数据库，可用升级前记录的源码版本重新部署程序。需要回退数据时，按[切换到恢复后的数据库](#切换到恢复后的数据库)操作。
+
+## 注册与邮件配置
+
+| `FINESHELL_SYNC_REGISTRATION` | 新账号 | 已有账号 |
+| --- | --- | --- |
+| `open`（默认） | 自助注册 | 可登录、同步 |
+| `invite` | 管理员发放邀请码，用户填写邮件验证码 | 可登录、同步 |
+| `closed` | 暂停注册 | 可登录、同步 |
+
+改完配置后，systemd 执行 `sudo systemctl restart fineshell-sync`，Compose 执行 `docker compose up -d` 使新的环境变量生效。自建 SMTP 465 使用隐式 TLS，587 使用强制 STARTTLS。两种方式都校验证书。只有邀请注册流程需要发信。
 
 ```dotenv
 FINESHELL_SYNC_REGISTRATION=invite
@@ -66,10 +138,14 @@ FINESHELL_SYNC_SMTP_USER=sync@example.com
 FINESHELL_SYNC_SMTP_PASSWORD=<SMTP 密码>
 ```
 
-使用 Resend 时改设 `FINESHELL_SYNC_MAIL_PROVIDER=resend`，提供 `FINESHELL_SYNC_MAIL_FROM` 和 `FINESHELL_SYNC_RESEND_API_KEY`。修改配置后重启服务。用下面与你部署方式对应的命令创建邀请码，将输出私下分发给指定邮箱的用户。
+用 Resend 时将 `FINESHELL_SYNC_MAIL_PROVIDER` 设为 `resend`，配置已验证的 `FINESHELL_SYNC_MAIL_FROM` 和 `FINESHELL_SYNC_RESEND_API_KEY`。待邮件配置生效后，选择与你部署方式对应的一条命令创建邀请码，私下发给对应邮箱的用户。邀请码绑定邮箱、有效期七天，注册成功后失效。邮箱验证码有效期为 15 分钟。
 
 ```bash
-sudo env FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/onboarding.mjs invite user@example.com
+# systemd
+sudo env FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite \
+  /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/onboarding.mjs invite user@example.com
+
+# Docker Compose，在 sync-server 目录运行
 docker compose exec sync node onboarding.mjs invite user@example.com
 ```
 
@@ -77,34 +153,66 @@ docker compose exec sync node onboarding.mjs invite user@example.com
 
 1. 在第一台设备的「主机同步」中创建账号，把生成的恢复密钥保存在密码管理器。
 2. 在另一台设备中输入同一个服务地址、账号密码和恢复密钥。成功后凭据会写入设备的系统凭据库，私钥文件导入本机。首次连接时仍需按提示核对服务器指纹。SSH Agent 中的密钥要在对应设备配置。
-3. 主窗口运行期间每 15 秒检查一次，可在设置里点「立即同步」。不同主机的修改会合并。同一项在两台设备同时修改时，设置中可比较并逐项选择版本。本机找不到某个私钥文件时，其他主机仍会同步，设置会显示受影响条目并提供重新关联入口。
+3. 主窗口运行时会自动检查同步，新改动可在设置中点「立即同步」发起同步。不同主机的修改会合并。同一项在两台设备同时修改时，设置中可比较并逐项选择版本。本机找不到某个私钥文件时，其他主机仍会同步，设置会显示受影响条目并提供重新关联入口。
 4. 一个 FineShell 本地配置绑定一个同步账号。退出登录会停止自动同步，已同步的连接仍保留在本机。同步设置可以查看账号的登录设备和最后同步时间，重命名当前设备，并撤销其他设备的登录。
 
 同步包括已保存的主机、分组、关联代理与 SSH 密钥，以及已经保存的对应密码或口令。连接历史、服务器指纹信任、应用设置和终端记录保留在各设备。恢复密钥丢失后，账号密码无法解密远端主机数据。
 
 ## 异机备份与恢复
 
-Linux 可以使用 SQLite 在线备份与完整性检查脚本：
+| 用途 | 方式 |
+| --- | --- |
+| 升级前留一份一致的 SQLite 快照 | 在线快照 |
+| 换服务器，需要带走备份 | AES-256-GCM 可移植备份 |
+| 在独立 Windows 电脑上定期备份 | PowerShell 脚本与当前 Windows 用户的 DPAPI |
+
+### 在线快照
+
+可以在服务运行时执行。脚本用 SQLite 的在线备份接口生成一致快照，并检查完整性。输出的 SQLite 文件仍包含账号和会话数据，按敏感文件保存。
 
 ```bash
-sudo env FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/backup-snapshot.mjs /var/backups/fineshell-sync
+# systemd
+sudo env FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite \
+  /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/backup-snapshot.mjs /var/backups/fineshell-sync
+
+# Docker Compose，在 sync-server 目录运行
 docker compose exec sync node backup-snapshot.mjs /data/backups
+# 用上一条命令输出的实际文件名替换下例文件名
+docker compose cp sync:/data/backups/vault-示例.sqlite ./
 ```
 
-跨系统恢复可以使用 AES-256-GCM 加密的备份。生成一次专用随机密钥，把密钥文件和备份分开保存。每次备份使用不同的目标文件名。恢复需要可写的父目录，已有数据库文件会受到保护。
+Compose 快照起初仍在同一个卷里。复制出来后，将它存放到独立的受控存储中。
+
+### 可移植加密备份
+
+以下以 systemd 的默认安装路径为例。首次创建一次专用的 32 字节随机备份密钥。若已持有密钥，请跳过生成命令。恢复时需要生成该备份的同一个密钥文件，平时与备份分开存放。
 
 ```bash
-umask 077
-openssl rand -out /secure/fineshell-backup.key 32
-node portable-backup.mjs backup /data/vault.sqlite /offsite/fineshell-2026-11-19.backup /secure/fineshell-backup.key
-node portable-backup.mjs restore /offsite/fineshell-2026-11-19.backup /fresh/vault.sqlite /secure/fineshell-backup.key
+sudo install -d -m 0700 /etc/fineshell-sync/backup-keys /var/backups/fineshell-sync
+sudo sh -c 'umask 077; set -C; openssl rand 32 > /etc/fineshell-sync/backup-keys/portable.key'
 ```
 
-恢复命令会验证加密认证标签和 SQLite 完整性，清除旧会话、邀请码和邮箱验证码，再写出恢复文件。启动新实例后，先用旧账号密码和恢复密钥重新登录并同步，再切换域名。若备份早于最近一次恢复密钥更换，快照仍使用备份时的恢复密钥。演练使用测试数据和独立目录。
+使用唯一的备份文件名，命令输出备份路径。把生成的加密文件复制到异机存储。
 
-Linux 快照仍包含账号与会话数据。将快照转存到受访问控制的加密异机存储。Compose 可用 `docker compose cp sync:/data/backups/<快照文件> .` 取回已完成的快照。
+```bash
+backup="/var/backups/fineshell-sync/vault-$(date -u +%Y%m%dT%H%M%SZ).backup"
+sudo /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/portable-backup.mjs backup \
+  /var/lib/fineshell-sync/vault.sqlite "$backup" /etc/fineshell-sync/backup-keys/portable.key
+```
 
-在另一台 Windows 电脑上运行 PowerShell 7。确认任务账号可以使用已固定的服务器主机指纹通过 SSH 登录。脚本使用 SQLite 在线备份 API 生成一致快照，给快照加上 Windows DPAPI 当前用户保护，再保存到本地。使用任务计划程序时让同一个 Windows 用户执行脚本。电脑关机或该账号未登录期间，备份可能延迟。
+在新 Linux 实例上安装相同或兼容版本的服务。先把加密文件和对应密钥安全传到新实例，并将文件权限设为 `0600`。在下面的命令中换入实际路径。恢复目录需要支持硬链接，因为脚本在同一目录验证结果后才发布文件。输出目标须是新文件，脚本会拒绝覆盖已有数据库。
+
+```bash
+sudo install -d -m 0700 /var/backups/fineshell-sync/restore
+sudo /opt/fineshell-sync/node/bin/node /opt/fineshell-sync/portable-backup.mjs restore \
+  /path/to/vault.backup /var/backups/fineshell-sync/restore/vault.sqlite /path/to/portable.key
+```
+
+恢复时会校验加密认证标签和 SQLite 完整性，并清除旧登录会话、邀请码及邮箱验证码。切换生产服务前，先在隔离实例用测试账号验证登录、读取和更新同步数据。如果备份早于最近一次恢复密钥更换，恢复后需用备份当时的恢复密钥解锁对应账号。
+
+### Windows 异机备份
+
+在独立 Windows 电脑上运行 PowerShell 7。任务账号需能通过 SSH 登录 Linux 服务器，并持有已核对的服务器主机指纹。脚本生成在线快照，用当前 Windows 用户的 DPAPI 加密后保存到本机。
 
 ```powershell
 pwsh -File ./sync-server/deploy/backup-to-windows.ps1 `
@@ -112,9 +220,27 @@ pwsh -File ./sync-server/deploy/backup-to-windows.ps1 `
   -Destination 'C:\path\FineShellSyncBackups' -RestoreDrill
 ```
 
-`-RestoreDrill` 使用 Node.js 26 解密新保存的快照，在内存中执行 SQLite 完整性检查并验证账号和会话表可读。可用 `-NodePath` 指定 Node.js。默认保留最近 30 天，只有备份成功后才清理旧快照。快照需要原 Windows 用户的 DPAPI 密钥，应保留该 Windows 用户配置及恢复手段。
+`-RestoreDrill` 用 Node.js 26 在内存解密并检查快照，可通过 `-NodePath` 指定 Node.js。默认保留最近 30 天，只有备份成功后才清理旧快照。任务计划程序应使用同一 Windows 用户，恢复也需要该用户的 DPAPI 凭据。
 
-服务故障时，先在隔离环境中解密并验证选定的快照。切换生产数据库前停止 `fineshell-sync`，完整归档原 SQLite 文件及其 WAL、SHM 文件，确保旧的 WAL 不会与恢复文件混用。在恢复文件上执行 `DELETE FROM sessions;`，在含邀请功能的数据库上同时清空 `email_verifications` 和 `invites` 表，避免已撤销会话或已使用邀请恢复有效。按原权限放置数据库后再启动服务并核对 `/healthz`。恢复到早于某台设备最后验证版本的快照后，该设备会检测到回退。重新登录后，在同步设置中确认用最近验证过的设备恢复云端。客户端会重新加密该快照并发布更高的版本。备份之后新建且未被快照保留的账号需要单独找回。
+### 切换到恢复后的数据库
+
+1. 先验证恢复文件。使用原始 SQLite 快照时，在隔离的恢复副本中清空 `sessions`，如存在 `invites` 和 `email_verifications` 也一并清空。可移植恢复命令已经执行了这一步。
+2. 停止目标同步服务。将原有 SQLite 数据库以及同目录下存在的 `-wal`、`-shm` 文件一起移到单独的归档目录。
+3. 将验证后的恢复文件放到服务配置的数据库路径，确保服务用户对目录和数据库拥有读写权限。原实例上可以参照归档数据库的属主和权限来设置。
+4. 启动服务，检查 `/healthz`，让客户端重新登录并核对同步。若客户端提示云端版本落后，可从持有较新且已验证快照的设备在同步设置中确认恢复。备份之后新建、且未被快照保留的账号需要单独找回。
+
+## Windows 或本机开发
+
+在仓库根目录使用 Node.js 26 和 PowerShell 运行。桌面应用中填写 `http://127.0.0.1:8787`。发行构建可通过 `VITE_FINESHELL_SYNC_URL` 预填正式 HTTPS 地址。
+
+```powershell
+npm ci --prefix sync-server --omit=dev --ignore-scripts
+$syncData = Join-Path $env:LOCALAPPDATA 'FineShellSyncDev'
+New-Item -ItemType Directory -Force -Path $syncData | Out-Null
+$env:FINESHELL_SYNC_DATABASE = Join-Path $syncData 'vault.sqlite'
+$env:FINESHELL_SYNC_PORT = '8787'
+node sync-server/server.mjs
+```
 
 ## 服务测试
 
