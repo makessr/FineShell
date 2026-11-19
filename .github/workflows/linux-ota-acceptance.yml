@@ -1,0 +1,58 @@
+name: Linux v0.5.1 OTA acceptance
+on:
+  push:
+    branches: [test/linux-ota-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: Linux OTA ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: amd64
+            digest: 773ad4de0fdc5504cec6ee3e2af191c445ff73b475bf505c2bf23e6ac818b94a
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+            digest: 162657efd089bafc522a427e863857da27a8723f362a6c72915eda7edbf5de9c
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify the official channel and download the baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ matrix.digest }}
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP"
+          test "$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" = v0.5.1
+          package="FineShell_0.5.0_linux_${ARCH}.deb"
+          gh release download v0.5.0 --repo "$GITHUB_REPOSITORY" --pattern "$package"
+          printf '%s  %s\n' "$DIGEST" "$package" | sha256sum --check
+          test "$(dpkg --print-architecture)" = "$ARCH"
+          test "$(dpkg-deb -f "$package" Architecture)" = "$ARCH"
+      - name: Install the v0.5.0 baseline and desktop test dependencies
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -Eeuo pipefail
+          package="$RUNNER_TEMP/FineShell_0.5.0_linux_${ARCH}.deb"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends "$package" xvfb xauth xdotool x11-utils dbus-x11 at-spi2-core python3-pyatspi
+      - name: Upgrade through the FineShell desktop and verify the restart
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -Eeuo pipefail
+          test "$(id -u)" -ne 0
+          sudo -n true
+          package_name="$(dpkg-deb -f "$RUNNER_TEMP/FineShell_0.5.0_linux_${ARCH}.deb" Package)"
+          xvfb-run -a -s '-screen 0 1440x1000x24' dbus-run-session -- bash scripts/linux-smoke/ota.sh "$package_name"
