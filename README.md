@@ -110,7 +110,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
-本 fork 的公开版本为 [v0.2.0](https://github.com/makessr/FineShell/releases/tag/v0.2.0)，可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
+可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载已发布的 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
 
 - Windows x64 提供 `.exe`（NSIS）和 `.msi`。
 - Windows ARM64 提供 `.exe`（NSIS）。
@@ -211,9 +211,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 应用在设备端加密同步数据。服务端保存加密后的数据，恢复密钥用于在新设备上解锁。自建部署与日常维护见 [主机同步服务文档](sync-server/README.md)。
 
-### 待发布的桌面改进
+### v0.3.0 的桌面改进
 
-[PR #2](https://github.com/makessr/FineShell/pull/2) 增加了登录设备列表与撤销、逐条解决同步冲突，以及私钥缺失时继续同步其他主机并提示重新关联。云端快照回退后，可在设备上确认恢复。分屏方向会记住，打开两条终端会话后恢复。上述桌面改动待随新安装包发布。
+同步设置可查看和撤销登录设备，并逐条解决同步冲突。私钥文件缺失时，可以重新关联私钥，其他主机仍可同步。云端快照回退后，可在持有较新已验证快照的设备上确认恢复。终端会记住分屏方向，打开两条会话后恢复布局。
 
 ### 同步服务备份
 
