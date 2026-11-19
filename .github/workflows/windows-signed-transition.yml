@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  transition:
+  build:
     if: github.repository == 'makessr/FineShell'
     runs-on: windows-latest
     timeout-minutes: 35
@@ -26,6 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          save-if: false
       - name: Download and verify the official FineShell v0.5.1 installer
         run: |
           $file = Join-Path $env:RUNNER_TEMP 'FineShell-v0.5.1-x64.exe'
@@ -46,7 +47,6 @@ jobs:
           if ($LASTEXITCODE) { throw 'Could not install the loopback SSH fixture.' }
       - name: Build and sign the Windows NSIS candidate
         env:
-          CARGO_PROFILE_RELEASE_LTO: "false"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
