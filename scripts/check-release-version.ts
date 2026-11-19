@@ -53,23 +53,40 @@ export function validateReleaseVersion(
 export function validateReleaseRepository(
   endpoints: unknown,
   repository: string,
+  channelMigrationDraft = false,
 ) {
-  const expected = `https://github.com/${repository}/releases/latest/download/latest.json`;
+  if (
+    channelMigrationDraft &&
+    (repository.toLowerCase() !== "makessr/fineshell" ||
+      !Array.isArray(endpoints) ||
+      endpoints.length !== 1)
+  ) {
+    throw new Error("渠道迁移草稿只能由 makessr/FineShell 构建，且客户端必须配置一个更新地址");
+  }
+
+  const channelRepository = channelMigrationDraft ? "makessr/ZhanDu" : repository;
+  const expected = `https://github.com/${channelRepository}/releases/latest/download/latest.json`;
   const endpoint = Array.isArray(endpoints) ? endpoints[0] : undefined;
   const match = typeof endpoint === "string"
     ? endpoint.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/releases\/latest\/download\/latest\.json$/)
     : null;
   if (
     !match ||
-    match[1].toLowerCase() !== repository.toLowerCase()
+    match[1].toLowerCase() !== channelRepository.toLowerCase()
   ) {
+    const message = channelMigrationDraft
+      ? "渠道迁移草稿的客户端更新地址不正确"
+      : "应用更新渠道与发布仓库不一致";
     throw new Error(
-      `应用更新渠道与发布仓库不一致：当前地址为 ${String(endpoint)}，${repository} 的更新地址应为 ${expected}`,
+      `${message}：当前地址为 ${String(endpoint)}，期望 ${expected}`,
     );
   }
 }
 
-function readReleaseVersions(repository?: string): ReleaseVersions {
+function readReleaseVersions(
+  repository?: string,
+  channelMigrationDraft = false,
+): ReleaseVersions {
   const projectRoot = resolve(import.meta.dir, "..");
   const packageJson = JSON.parse(
     readFileSync(resolve(projectRoot, "package.json"), "utf8"),
@@ -86,7 +103,11 @@ function readReleaseVersions(repository?: string): ReleaseVersions {
     throw new Error("package.json 或 tauri.conf.json 缺少 version");
   }
   if (repository !== undefined) {
-    validateReleaseRepository(tauriConfig.plugins?.updater?.endpoints, repository);
+    validateReleaseRepository(
+      tauriConfig.plugins?.updater?.endpoints,
+      repository,
+      channelMigrationDraft,
+    );
   }
 
   return {
@@ -100,7 +121,14 @@ if (import.meta.main) {
   try {
     const releaseTag = process.argv[2] ?? "";
     const repository = process.argv[3];
-    const version = validateReleaseVersion(releaseTag, readReleaseVersions(repository));
+    const mode = process.argv[4];
+    if (mode !== undefined && (mode !== "--channel-migration-draft" || !repository)) {
+      throw new Error("发布校验模式无效");
+    }
+    const version = validateReleaseVersion(
+      releaseTag,
+      readReleaseVersions(repository, mode === "--channel-migration-draft"),
+    );
     console.log(`FineShell ${version} 版本校验通过（${releaseTag}）`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
