@@ -1,0 +1,70 @@
+name: macOS v0.5.1 startup acceptance
+
+on:
+  push:
+    branches: [test/macos-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            artifact: FineShell_0.5.1_darwin_aarch64.dmg
+            digest: 1d70aa526f8fe25536d5d55a97c68004f569adeb8b42407819985f8978cae5f2
+          - runner: macos-15-intel
+            arch: x86_64
+            artifact: FineShell_0.5.1_darwin_x64.dmg
+            digest: 6a386bb79c1f670d1151c153bf55a3110ba72f6f302d1dad46d73d9ef962608f
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Download the official DMG and verify its digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ matrix.artifact }}
+          DIGEST: ${{ matrix.digest }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download v0.5.1 --repo "$GITHUB_REPOSITORY" --pattern "$ARTIFACT"
+          printf '%s  %s\n' "$DIGEST" "$ARTIFACT" | shasum -a 256 --check
+      - name: Check the code signature and start FineShell
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = "$ARCH"
+          work="$(mktemp -d "$RUNNER_TEMP/fineshell-dmg.XXXXXX")"
+          mount="$work/mount"
+          mkdir "$mount"
+          hdiutil attach "$RUNNER_TEMP/$ARTIFACT" -mountpoint "$mount" -nobrowse -readonly
+          trap 'hdiutil detach "$mount" || printf "%s\n" "Could not detach the test disk image." >&2' EXIT
+
+          app="$work/FineShell.app"
+          ditto "$mount/FineShell.app" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app" 2>&1
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+          test "$version" = '0.5.1'
+          test "$(lipo -archs "$app/Contents/MacOS/$executable")" = "$ARCH"
+          if spctl --assess --type execute --verbose=2 "$app"; then
+            printf '%s\n' 'Gatekeeper assessment accepted the app.'
+          else
+            printf '%s\n' 'Gatekeeper assessment did not accept the app.'
+          fi
+
+          swiftc scripts/macos-smoke/verify-window.swift -o "$work/verify-window"
+          open -n "$app"
+          "$work/verify-window" "$app"
