@@ -252,7 +252,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 - 提交 Pull Request 前请运行 `bun run check`、Rust 测试和 Clippy。
 - 每次提交都同步更新本 README。Pull Request 的标题和说明统一用中文，注明用户可见变化和已执行的验证。
 
-## Windows 发布验收
+## 桌面发布验收
+
+macOS 和 Linux 的 OTA 验收从前一版官方安装包开始，在对应架构的托管桌面环境中点击应用内更新。脚本检查升级后的版本、可见窗口和本地测试数据，并核对 macOS 应用签名。
 
 从 v0.5.1 起，Windows 版支持只启用现代椭圆曲线密钥交换的 SSH 服务器。桌面验收使用 Curve25519 握手覆盖该场景。
 
