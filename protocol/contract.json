@@ -91,6 +91,7 @@
     "ssh_disconnect": true,
     "sftp_connect": true,
     "sftp_list": true,
+    "sftp_list_preview": true,
     "sftp_inspect_upload_paths": true,
     "sftp_create_directory": true,
     "sftp_ensure_upload_directories": true,

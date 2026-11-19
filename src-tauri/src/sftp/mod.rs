@@ -18,7 +18,7 @@ use std::{
 use polling::{Event, Events, Poller};
 use serde::{Deserialize, Serialize};
 use ssh2::{BlockDirections, FileStat, FileType, OpenFlags, OpenType, RenameFlags, Session, Sftp};
-use tauri::{AppHandle, Emitter};
+use tauri::{ipc::Channel, AppHandle, Emitter};
 
 use crate::protocol::SFTP_TRANSFER_EVENT;
 use crate::ssh::{
@@ -188,6 +188,7 @@ struct SftpTransferPayload {
 enum SftpCommand {
     List {
         path: String,
+        preview: Option<Channel<Vec<SftpEntry>>>,
         reply: Sender<Result<SftpListResult, String>>,
     },
     CreateDirectory {

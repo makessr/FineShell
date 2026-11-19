@@ -2,6 +2,13 @@
   gap: 10px;
 }
 
+.sftp-directory-preview-status {
+  flex: none;
+  padding: 4px 8px;
+  color: var(--color-text-2);
+  font-size: 12px;
+}
+
 .sftp-name-filter {
   flex: none;
   padding: 4px 8px;

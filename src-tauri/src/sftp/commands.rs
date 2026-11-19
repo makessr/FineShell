@@ -165,7 +165,28 @@ pub(crate) async fn sftp_list(
     path: String,
 ) -> Result<SftpListResult, String> {
     dispatch(manager.inner().clone(), session_id, move |reply| {
-        SftpCommand::List { path, reply }
+        SftpCommand::List {
+            path,
+            preview: None,
+            reply,
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn sftp_list_preview(
+    manager: State<'_, SftpSessionManager>,
+    session_id: String,
+    path: String,
+    on_batch: Channel<Vec<SftpEntry>>,
+) -> Result<SftpListResult, String> {
+    dispatch(manager.inner().clone(), session_id, move |reply| {
+        SftpCommand::List {
+            path,
+            preview: Some(on_batch),
+            reply,
+        }
     })
     .await
 }

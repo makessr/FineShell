@@ -97,36 +97,21 @@ pub(super) fn list_directory(
     sftp: &Sftp,
     path: &str,
     identity_cache: &mut RemoteIdentityCache,
+    preview: Option<&Channel<Vec<SftpEntry>>>,
 ) -> Result<SftpListResult, String> {
     let path = normalize_remote_operation_path(path)?;
     let canonical_path = sftp
         .realpath(Path::new(&path))
         .map_err(|error| format!("无法解析远程目录：{error}"))?;
-    let raw_entries = sftp
-        .readdir(&canonical_path)
-        .map_err(|error| format!("无法读取远程目录：{error}"))?;
+    let raw_entries = match preview {
+        Some(preview) => read_directory_preview(sftp, &canonical_path, preview),
+        None => sftp.readdir(&canonical_path),
+    }
+    .map_err(|error| format!("无法读取远程目录：{error}"))?;
     resolve_identity_names(session, &raw_entries, identity_cache);
     let mut entries = raw_entries
         .into_iter()
-        .map(|(entry_path, stat)| {
-            let path_text = remote_path_text(&entry_path);
-            let name = remote_file_name(&path_text).unwrap_or_else(|| path_text.clone());
-            SftpEntry {
-                id: path_text.clone(),
-                name,
-                path: path_text,
-                kind: entry_kind(&stat),
-                size: stat.size.unwrap_or(0),
-                modified_at: stat.mtime,
-                permissions: stat.perm.map(|value| value & 0o7777),
-                owner: stat
-                    .uid
-                    .and_then(|id| identity_cache.users.get(&id).cloned()),
-                group: stat
-                    .gid
-                    .and_then(|id| identity_cache.groups.get(&id).cloned()),
-            }
-        })
+        .map(|(path, stat)| directory_entry(&path, &stat, Some(identity_cache)))
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         let left_directory = left.kind == "directory";
@@ -140,6 +125,58 @@ pub(super) fn list_directory(
         path: remote_path_text(&canonical_path),
         entries,
     })
+}
+
+fn directory_entry(path: &Path, stat: &FileStat, cache: Option<&RemoteIdentityCache>) -> SftpEntry {
+    let path = remote_path_text(path);
+    let name = remote_file_name(&path).unwrap_or_else(|| path.clone());
+    SftpEntry {
+        id: path.clone(),
+        name,
+        path,
+        kind: entry_kind(stat),
+        size: stat.size.unwrap_or(0),
+        modified_at: stat.mtime,
+        permissions: stat.perm.map(|value| value & 0o7777),
+        owner: cache.and_then(|cache| cache.users.get(&stat.uid?).cloned()),
+        group: cache.and_then(|cache| cache.groups.get(&stat.gid?).cloned()),
+    }
+}
+
+fn read_directory_preview(
+    sftp: &Sftp,
+    path: &Path,
+    preview: &Channel<Vec<SftpEntry>>,
+) -> Result<Vec<(PathBuf, FileStat)>, ssh2::Error> {
+    const PREVIEW_BATCH: usize = 128;
+    const PREVIEW_LIMIT: usize = 1024;
+    // Match ssh2's Sftp::readdir handling of its end-of-directory sentinel and EAGAIN.
+    const DIRECTORY_EOF: ssh2::ErrorCode = ssh2::ErrorCode::Session(-16);
+    const IO_RETRY: ssh2::ErrorCode = ssh2::ErrorCode::Session(-37);
+    let mut directory = sftp.opendir(path)?;
+    let mut entries = Vec::new();
+    let mut batch = Vec::new();
+    loop {
+        match directory.readdir() {
+            Ok((name, stat)) => {
+                if name == Path::new(".") || name == Path::new("..") {
+                    continue;
+                }
+                let entry_path = path.join(name);
+                if entries.len() < PREVIEW_LIMIT {
+                    batch.push(directory_entry(&entry_path, &stat, None));
+                    if batch.len() == PREVIEW_BATCH {
+                        let _ = preview.send(std::mem::take(&mut batch));
+                    }
+                }
+                entries.push((entry_path, stat));
+            }
+            Err(error) if error.code() == DIRECTORY_EOF => break,
+            Err(error) if error.code() == IO_RETRY => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(entries)
 }
 
 pub(super) fn remote_exists(sftp: &Sftp, path: &Path) -> bool {
