@@ -24,6 +24,7 @@ import {
 } from "@arco-design/web-react/icon";
 import { getVersion } from "@tauri-apps/api/app";
 import type { AppSettings } from "../app-settings";
+import { APP_DISPLAY_NAME } from "../application-brand";
 import {
   applyCloudBackupCredentials,
   cloudBackupCredentialStatus,
@@ -228,8 +229,7 @@ function CloudBackupSettings({
           content: (
             <div className="cloud-backup-recovery-key">
               <Typography.Paragraph>
-                这是解锁云备份的唯一恢复密钥。FineShell
-                不会上传或再次显示它，请立即保存到安全位置。
+                这是解锁云备份的唯一恢复密钥。{APP_DISPLAY_NAME}不会上传或再次显示它，请立即保存到安全位置。
               </Typography.Paragraph>
               <Typography.Paragraph copyable code>
                 {result.recoveryKey}
@@ -280,7 +280,7 @@ function CloudBackupSettings({
         configuration: serializeConfigurationExport(configuration),
         credentialReferences: configuration.credentialReferences,
         includeCredentials: saved.includeCredentials,
-        deviceName: navigator.platform || "FineShell",
+        deviceName: navigator.platform || APP_DISPLAY_NAME,
         appVersion,
         retentionCount: saved.retentionCount,
       });
@@ -475,7 +475,7 @@ function CloudBackupSettings({
             <span>路径前缀</span>
             <Input
               onChange={(value) => updateStorage("prefix", value)}
-              placeholder="FineShell"
+              placeholder={APP_DISPLAY_NAME}
               value={settings.storage.prefix}
             />
           </label>

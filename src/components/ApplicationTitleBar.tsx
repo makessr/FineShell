@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { isApplePlatform } from "../platform-utils";
+import { APP_DISPLAY_NAME } from "../application-brand";
 
 interface ApplicationTitleBarProps {
   hasActiveSession: boolean;
@@ -116,7 +117,7 @@ export default function ApplicationTitleBar({
         {!applePlatform && (
           <div className="application-titlebar-brand">
             <img alt="" src="/app-icon.png" />
-            <span>FineShell</span>
+            <span>{APP_DISPLAY_NAME}</span>
           </div>
         )}
       </div>

@@ -33,7 +33,7 @@ function updaterService(
     canTestRoutes: true,
     checkForUpdate: async () => null,
     getApplicationInfo: async () => ({
-      name: "FineShell",
+      name: "栈渡",
       tauriVersion: "2.11.5",
       version: "0.1.0",
     }),
@@ -131,7 +131,7 @@ describe("AboutSettings", () => {
 
     await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
-    expect(screen.getByText(/正在重新启动 FineShell/)).not.toBeNull();
+    expect(screen.getByText(/正在重新启动 栈渡/)).not.toBeNull();
 
     view.unmount();
     expect(close).toHaveBeenCalledTimes(1);

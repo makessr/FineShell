@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Alert, Button, Input, Message, Popconfirm, Space, Typography } from "@arco-design/web-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { APP_DISPLAY_NAME } from "../application-brand";
 import { commandErrorMessage } from "../tauri-protocol";
 import {
   hostSyncAccount,
@@ -229,7 +230,7 @@ export default function HostSyncSettings() {
     void requestHostSync({ ...options, manual: true }).catch((error) => Message.error(commandErrorMessage(error)));
   }
 
-  if (!isTauri()) return <Alert content="请在 FineShell 桌面应用中使用主机同步。" />;
+  if (!isTauri()) return <Alert content={`请在${APP_DISPLAY_NAME}桌面应用中使用主机同步。`} />;
   if (loading) return <Typography.Text>正在读取同步账号…</Typography.Text>;
 
   if (account && !status?.signInRequired) {

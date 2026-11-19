@@ -1,7 +1,7 @@
-# FineShell
+# 栈渡（ZhanDu）
 
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="112" alt="FineShell logo" />
+  <img src="src-tauri/icons/128x128.png" width="112" alt="栈渡标志" />
 </p>
 
 <p align="center">
@@ -19,7 +19,9 @@
 
 ![FineShell 工作区：服务器监控、终端与 SFTP 文件管理](docs/screenshots/terminal.png)
 
-本仓库是 [Max0897/FineShell](https://github.com/Max0897/FineShell) 的 fork，维护自己的 Windows 安装包、更新渠道和主机账号同步服务。
+栈渡由 makessr 独立维护，提供 Windows、macOS 和 Linux 客户端、独立更新渠道和主机账号同步服务。
+
+栈渡源自 Max0897 开发的 FineShell 项目，沿用 Apache-2.0 许可证。 [原作者 Max0897](https://github.com/Max0897) · [原项目 FineShell](https://github.com/Max0897/FineShell) · [许可证](LICENSE)
 
 ## 核心能力
 
@@ -117,6 +119,8 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 ## 下载与安装
 
 **仓库版本** v0.5.1。各版本变动见 [更新日志](CHANGELOG.md)。
+
+下一版的客户端界面将显示“栈渡”。为衔接旧版升级，安装包和更新渠道沿用 FineShell，主机配置和凭据继续使用原有应用标识。
 
 在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 查看对应版本的安装包。应用通过本仓库发布的更新清单检查更新。
 
