@@ -56,17 +56,27 @@ export async function startSshFixture(ssh2, directory) {
       session.on("sftp", (acceptSftp) => {
         const sftp = acceptSftp();
         const attributes = { mode: 0o040755, size: 0, uid: 1000, gid: 1000, atime: 0, mtime: 0 };
-        const entries = [{ filename: "fineshell-smoke.txt", longname: "fineshell-smoke.txt",
-          attrs: { ...attributes, mode: 0o100644 } }];
+        const entry = (filename) => ({ filename, longname: filename,
+          attrs: { ...attributes, mode: 0o100644 } });
+        const entries = [entry("fineshell-smoke.txt"),
+          ...Array.from({ length: 127 }, (_, index) => entry(`zz-${index}.txt`))];
         const handle = Buffer.from([0]);
-        let sent = false;
+        let batch = 0;
         sftp.on("REALPATH", (id) => sftp.name(id, [{ filename: "/", longname: "/", attrs: attributes }]));
         sftp.on("STAT", (id) => sftp.attrs(id, attributes));
         sftp.on("LSTAT", (id) => sftp.attrs(id, attributes));
-        sftp.on("OPENDIR", (id) => { sent = false; sftp.handle(id, handle); });
+        sftp.on("OPENDIR", (id) => { batch = 0; sftp.handle(id, handle); });
         sftp.on("READDIR", (id) => {
-          if (sent) sftp.status(id, 1);
-          else { sftp.name(id, entries); sent = true; }
+          switch (batch++) {
+            case 0:
+              sftp.name(id, entries);
+              break;
+            case 1:
+              setTimeout(() => sftp.name(id, [entry("after-preview.txt")]), 1500);
+              break;
+            default:
+              sftp.status(id, 1);
+          }
         });
         sftp.on("CLOSE", (id) => sftp.status(id, 0));
       });

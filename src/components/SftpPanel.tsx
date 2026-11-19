@@ -15,7 +15,7 @@ import {
   Typography,
 } from "@arco-design/web-react";
 import type { TableColumnProps, TableInstance } from "@arco-design/web-react";
-import { isTauri } from "@tauri-apps/api/core";
+import { Channel, isTauri } from "@tauri-apps/api/core";
 import { diagnosticInvoke as invoke } from "../diagnostics";
 import {
   IconExclamationCircle,
@@ -99,6 +99,7 @@ interface BrowserState {
   path: string;
   inputPath: string;
   entries: SftpEntry[];
+  previewEntries?: SftpEntry[];
   error?: string;
 }
 
@@ -179,6 +180,7 @@ function SftpPanel({
   const [retryingSessionId, setRetryingSessionId] = useState<string>();
   const [selectedEntryKeys, setSelectedEntryKeys] = useState<string[]>([]);
   const connectingRef = useRef(new Set<string>());
+  const directoryRequestsRef = useRef(new Map<string, symbol>());
   const connectedHomesRef = useRef(new Map<string, string>());
   const handledRefreshRequestsRef = useRef<Record<string, number>>({});
   const handledTerminalDirectoryRevisionsRef = useRef(
@@ -203,6 +205,10 @@ function SftpPanel({
 
   const updateBrowser = useCallback(
     (sessionId: string, values: Partial<BrowserState>) => {
+      if (values.status === "idle" || values.status === "failed") {
+        directoryRequestsRef.current.delete(sessionId);
+        values = { ...values, previewEntries: undefined };
+      }
       setBrowsers((current) => ({
         ...current,
         [sessionId]: {
@@ -216,26 +222,48 @@ function SftpPanel({
 
   const loadDirectory = useCallback(
     async (sessionId: string, path: string, initial = false) => {
+      const requests = directoryRequestsRef.current;
+      const request = Symbol();
+      requests.set(sessionId, request);
       updateBrowser(sessionId, {
         status: initial ? "connecting" : "loading",
         inputPath: path,
         error: undefined,
+        previewEntries: undefined,
+      });
+      const onBatch = new Channel<SftpEntry[]>((batch) => {
+        if (requests.get(sessionId) !== request) return;
+        setBrowsers((current) => {
+          const browser = current[sessionId];
+          if (!browser) return current;
+          return {
+            ...current,
+            [sessionId]: {
+              ...browser,
+              previewEntries: [...(browser.previewEntries ?? []), ...batch],
+            },
+          };
+        });
       });
       try {
-        const result = await invoke<SftpListResult>("sftp_list", {
+        const result = await invoke<SftpListResult>("sftp_list_preview", {
           sessionId,
           path,
+          onBatch,
         });
+        if (requests.get(sessionId) !== request) return;
         updateBrowser(sessionId, {
           status: "ready",
           path: result.path,
           inputPath: result.path,
           entries: result.entries,
+          previewEntries: undefined,
           error: undefined,
         });
         const hostId = sessionHostIdsRef.current.get(sessionId);
         if (hostId) recordVisitedPath(hostId, result.path);
       } catch (error) {
+        if (requests.get(sessionId) !== request) return;
         const message = commandErrorMessage(error);
         if (initial) {
           updateBrowser(sessionId, { status: "failed", error: message });
@@ -248,12 +276,15 @@ function SftpPanel({
                 ...previous,
                 status: "ready",
                 inputPath: previous.path,
+                previewEntries: undefined,
                 error: message,
               },
             };
           });
           Message.error(message);
         }
+      } finally {
+        if (requests.get(sessionId) === request) requests.delete(sessionId);
       }
     },
     [recordVisitedPath, updateBrowser],
@@ -523,7 +554,16 @@ function SftpPanel({
       ),
     [browser?.entries, showHiddenFiles],
   );
-  const virtualized = ready && visibleEntries.length >= SFTP_VIRTUAL_ROW_THRESHOLD;
+  const previewEntries = useMemo(
+    () =>
+      (browser?.previewEntries ?? []).filter(
+        (entry) => showHiddenFiles || !entry.name.startsWith("."),
+      ),
+    [browser?.previewEntries, showHiddenFiles],
+  );
+  const showingPreview = Boolean(connected && !ready && previewEntries.length);
+  const displayedEntries = ready ? visibleEntries : showingPreview ? previewEntries : [];
+  const virtualized = displayedEntries.length >= SFTP_VIRTUAL_ROW_THRESHOLD;
 
   useLayoutEffect(() => {
     if (!virtualized) return;
@@ -1093,6 +1133,12 @@ function SftpPanel({
         transferActivityCount={transferActivityCount}
       />
 
+      {showingPreview && (
+        <div className="sftp-directory-preview-status" role="status">
+          正在读取目录，完成后即可操作文件
+        </div>
+      )}
+
       <>
         <ContextMenu
           menuClassName="sftp-context-menu"
@@ -1117,8 +1163,8 @@ function SftpPanel({
               border={false}
               className="sftp-table"
               columns={columns}
-              data={ready ? visibleEntries : []}
-              loading={Boolean(connected && busy)}
+              data={displayedEntries}
+              loading={Boolean(connected && busy && !showingPreview)}
               noDataElement={
                 <Empty description={ready ? "目录为空" : "暂无文件"} />
               }
@@ -1127,6 +1173,7 @@ function SftpPanel({
                 "data-sftp-entry-kind": entry.kind,
                 "data-sftp-entry-path": entry.path,
                 onDoubleClick: () => {
+                  if (!ready) return;
                   if (entry.kind === "directory") {
                     openDirectory(entry);
                   } else if (entry.kind === "file") {
@@ -1150,14 +1197,18 @@ function SftpPanel({
                   .filter(Boolean)
                   .join(" ")
               }
-              rowSelection={{
-                checkAll: true,
-                columnWidth: 42,
-                onChange: (keys) =>
-                  setSelectedEntryKeys(keys.map((key) => String(key))),
-                selectedRowKeys: selectedEntryKeys,
-                type: "checkbox",
-              }}
+              rowSelection={
+                ready
+                  ? {
+                      checkAll: true,
+                      columnWidth: 42,
+                      onChange: (keys) =>
+                        setSelectedEntryKeys(keys.map((key) => String(key))),
+                      selectedRowKeys: selectedEntryKeys,
+                      type: "checkbox",
+                    }
+                  : undefined
+              }
               size="small"
               scroll={virtualized ? { y: virtualBodyHeight } : undefined}
               virtualized={virtualized}

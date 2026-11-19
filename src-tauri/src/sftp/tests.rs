@@ -355,6 +355,7 @@ fn forwards_commands_to_an_active_sftp_session() {
             "session-1",
             SftpCommand::List {
                 path: "/tmp".to_string(),
+                preview: None,
                 reply,
             },
         )
@@ -453,6 +454,7 @@ fn completes_a_live_sftp_round_trip() -> Result<(), String> {
             &sftp,
             &directory,
             &mut RemoteIdentityCache::default(),
+            None,
         )?;
         if !entries
             .entries

@@ -140,7 +140,7 @@ try {
       button.click();
       return true;
     }, host.name));
-    await until("Authenticate and open the SSH session", async () => {
+    await until("Authenticate and show a read-only directory preview", async () => {
       const state = await evaluate(b, (fingerprint) => {
         const modal = document.querySelector(".fingerprint-confirm-modal");
         if (modal) {
@@ -148,10 +148,16 @@ try {
           [...modal.querySelectorAll("button")].find((button) => button.textContent.trim() === "信任并连接")?.click();
         }
         return !!document.querySelector(".terminal-status-connected") && !!document.querySelector(".xterm") &&
+          !!document.querySelector(".sftp-directory-preview-status") &&
+          !document.querySelector(".sftp-table input[type=checkbox]") &&
           document.body.innerText.includes("fineshell-smoke.txt");
       }, fixture.fingerprint);
       return fixture.counts[method] > 0 && state;
     });
+    await until("Show the completed SFTP directory", () => evaluate(b, () =>
+      !document.querySelector(".sftp-directory-preview-status") &&
+      !!document.querySelector(".sftp-table input[type=checkbox]") &&
+      document.body.innerText.includes("after-preview.txt")));
     console.log("设备 B 使用同步过来的 " + method + " 登录，并读取了 SFTP 测试目录。");
   }
 

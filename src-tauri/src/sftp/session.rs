@@ -19,8 +19,14 @@ pub(super) fn run_session(
             Err(RecvTimeoutError::Disconnected) => break,
         };
         match command {
-            SftpCommand::List { path, reply } => {
-                let _ = reply.send(list_directory(&session, &sftp, &path, &mut identity_cache));
+            SftpCommand::List { path, preview, reply } => {
+                let _ = reply.send(list_directory(
+                    &session,
+                    &sftp,
+                    &path,
+                    &mut identity_cache,
+                    preview.as_ref(),
+                ));
             }
             SftpCommand::CreateDirectory { path, reply } => {
                 let result = normalize_remote_operation_path(&path).and_then(|path| {
