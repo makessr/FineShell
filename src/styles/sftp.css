@@ -135,6 +135,14 @@
   position: relative;
 }
 
+.sftp-table-container-virtualized {
+  overflow-y: hidden;
+}
+
+.sftp-table.arco-table-virtualized {
+  min-width: 620px;
+}
+
 .sftp-file-drop-overlay {
   position: absolute;
   inset: 8px;
@@ -174,9 +182,18 @@
   cursor: default;
 }
 
-.sftp-table tbody > .arco-table-tr {
+.sftp-table [data-sftp-entry-id] {
   -webkit-user-select: none;
   user-select: none;
+}
+
+.sftp-table-virtualized .arco-table-body .arco-table-td {
+  min-width: 0;
+}
+
+.sftp-table-virtualized .arco-table-body .arco-table-selection-col {
+  max-width: none;
+  justify-content: center;
 }
 
 .sftp-name-cell.is-draggable {
