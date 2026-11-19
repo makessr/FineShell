@@ -5,9 +5,11 @@ import SftpToolbar from "./SftpToolbar";
 function renderToolbar() {
   const onInputPathChange = mock(() => undefined);
   const onNavigate = mock(() => undefined);
+  const onToggleNameFilter = mock(() => undefined);
   return {
     onInputPathChange,
     onNavigate,
+    onToggleNameFilter,
     ...render(
       <SftpToolbar
         bookmarks={[]}
@@ -18,6 +20,7 @@ function renderToolbar() {
         history={[]}
         inputPath="/var/log/nginx"
         loading={false}
+        nameFilterOpen={false}
         onClearHistory={() => undefined}
         onCreate={() => undefined}
         onInputPathChange={onInputPathChange}
@@ -27,6 +30,7 @@ function renderToolbar() {
         onRefresh={() => undefined}
         onRemoveBookmark={() => undefined}
         onToggleBookmark={() => undefined}
+        onToggleNameFilter={onToggleNameFilter}
         onUp={() => undefined}
         onUpload={() => undefined}
         operationLoading={false}
@@ -37,6 +41,12 @@ function renderToolbar() {
     ),
   };
 }
+
+test("opens the SFTP filename filter from the toolbar", () => {
+  const { onToggleNameFilter } = renderToolbar();
+  fireEvent.click(screen.getByRole("button", { name: "筛选文件名" }));
+  expect(onToggleNameFilter).toHaveBeenCalledTimes(1);
+});
 
 describe("SftpToolbar path navigation", () => {
   test("navigates to the directory represented by a breadcrumb item", () => {
