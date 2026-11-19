@@ -19,7 +19,9 @@
 
 ![FineShell 工作区：服务器监控、终端与 SFTP 文件管理](docs/screenshots/terminal.png)
 
-本仓库是 [Max0897/FineShell](https://github.com/Max0897/FineShell) 的 fork，维护自己的 Windows 安装包、更新渠道和主机账号同步服务。
+本仓库由 makessr 独立维护，提供 Windows、macOS 和 Linux 客户端安装包、自己的应用更新渠道和主机账号同步服务。
+
+FineShell 最初由 Max0897 开发。本项目源自原版 FineShell，沿用 Apache-2.0 许可证。 [原作者 Max0897](https://github.com/Max0897) · [原项目 Max0897/FineShell](https://github.com/Max0897/FineShell) · [许可证](LICENSE)
 
 ## 核心能力
 
