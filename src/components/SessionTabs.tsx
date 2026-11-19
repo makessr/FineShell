@@ -1,10 +1,13 @@
 import { useState, type ReactNode } from "react";
-import { Button, Dropdown, Menu, Tabs, Tooltip } from "@arco-design/web-react";
+import { Button, Dropdown, Input, Menu, Message, Modal, Popconfirm, Space, Tabs, Tooltip } from "@arco-design/web-react";
 import { IconHome } from "@arco-design/web-react/icon";
-import { Bot, Columns2 } from "lucide-react";
+import { Bot, Columns2, PanelsTopLeft } from "lucide-react";
 import type { TerminalSession } from "../models";
 import { sessionTabName } from "../terminal-utils";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
+import {
+  readTerminalWorkspaces, writeTerminalWorkspaces, type TerminalWorkspace,
+} from "../terminal-workspaces";
 
 const HOME_TAB_ID = "home";
 type SplitDirection = "columns" | "rows";
@@ -17,6 +20,7 @@ interface SessionTabsProps {
   homeContent: ReactNode;
   onActiveSessionChange: (sessionId: string | null) => void;
   onCloseSession: (sessionId: string) => void;
+  onOpenWorkspace?: (hostIds: string[]) => Promise<string[]>;
   onToggleAiAssistant: () => void;
   renderSession: (session: TerminalSession) => ReactNode;
   sessionContextMenuItems: (session: TerminalSession) => ContextMenuItem[];
@@ -44,6 +48,7 @@ function SessionTabs({
   homeContent,
   onActiveSessionChange,
   onCloseSession,
+  onOpenWorkspace,
   onToggleAiAssistant,
   renderSession,
   sessionContextMenuItems,
@@ -58,6 +63,10 @@ function SessionTabs({
     second: string;
     direction: SplitDirection;
   }>();
+  const [workspaces, setWorkspaces] = useState(readTerminalWorkspaces);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [opening, setOpening] = useState(false);
   const sessionIds = sessions.map(({ id }) => id);
   const companion = sessionIds.find((id) => id !== activeSessionId);
   const split = selectedPair ?? (preferredDirection && activeSessionId && companion
@@ -81,6 +90,59 @@ function SessionTabs({
           : { ...split, first, second: id });
     }
     onActiveSessionChange(id);
+  }
+
+  function saveWorkspaces(items: TerminalWorkspace[]) {
+    try {
+      writeTerminalWorkspaces(items);
+      setWorkspaces(items);
+      return true;
+    } catch {
+      Message.error("无法保存工作区");
+      return false;
+    }
+  }
+
+  const canSaveWorkspace = sessions.length > 0 && activeSessionId !== null &&
+    sessions.every(({ host }) => !host.id.startsWith("quick-"));
+
+  function saveWorkspace() {
+    const name = workspaceName.trim();
+    if (!name || !canSaveWorkspace || !activeSessionId) return;
+    const existing = workspaces.find((item) => item.name === name);
+    if (saveWorkspaces([
+      {
+        id: existing?.id ?? crypto.randomUUID(),
+        name,
+        hostIds: sessions.map(({ host }) => host.id),
+        active: sessionIds.indexOf(activeSessionId),
+        layout: visiblePair && split ? split.direction : "single",
+        panes: visiblePair?.map((id) => sessionIds.indexOf(id)) ?? [],
+      },
+      ...workspaces.filter((item) => item.id !== existing?.id),
+    ])) setWorkspaceName("");
+  }
+
+  async function openWorkspace(workspace: TerminalWorkspace) {
+    if (!onOpenWorkspace) return;
+    setOpening(true);
+    try {
+      const ids = await onOpenWorkspace(workspace.hostIds);
+      const [first, second] = workspace.panes.map((index) => ids[index]);
+      if (workspace.layout !== "single" && first && second && first !== second) {
+        setSplit({ first, second, direction: workspace.layout });
+        setPreferredDirection(workspace.layout);
+      } else {
+        setSplit(undefined);
+        setPreferredDirection(undefined);
+      }
+      onActiveSessionChange(ids[workspace.active] ?? ids[0] ?? null);
+      setWorkspaceOpen(false);
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : "无法打开工作区");
+    } finally {
+      setOpening(false);
+    }
   }
 
   function changeSplit(mode: string) {
@@ -194,6 +256,13 @@ function SessionTabs({
           );
         })}
       </div>
+      {onOpenWorkspace && (
+        <div className="terminal-workspaces-action">
+          <Button aria-label="SSH 工作区" title="SSH 工作区" type="text"
+            className="terminal-ai-action-button"
+            icon={<PanelsTopLeft aria-hidden="true" />} onClick={() => setWorkspaceOpen(true)} />
+        </div>
+      )}
       <div className="terminal-split-action">
         <Dropdown
           droplist={
@@ -232,6 +301,30 @@ function SessionTabs({
           </span>
         </Tooltip>
       </div>
+      <Modal title="SSH 工作区" visible={workspaceOpen} footer={null}
+        onCancel={() => setWorkspaceOpen(false)}>
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Space>
+            <Input aria-label="工作区名称" placeholder="工作区名称" value={workspaceName}
+              maxLength={60} onChange={setWorkspaceName} onPressEnter={saveWorkspace} />
+            <Button onClick={saveWorkspace}
+              disabled={opening || !canSaveWorkspace || !workspaceName.trim()}>
+              保存当前会话
+            </Button>
+          </Space>
+          {!canSaveWorkspace && <span>请先打开已保存的主机会话。</span>}
+          {workspaces.map((workspace) => (
+            <Space key={workspace.id} wrap>
+              <span>{workspace.name}（{workspace.hostIds.length} 条会话）</span>
+              <Button disabled={opening} onClick={() => void openWorkspace(workspace)}>打开</Button>
+              <Popconfirm content="删除这个工作区？"
+                onOk={() => { saveWorkspaces(workspaces.filter((item) => item.id !== workspace.id)); }}>
+                <Button disabled={opening}>删除</Button>
+              </Popconfirm>
+            </Space>
+          ))}
+        </Space>
+      </Modal>
     </>
   );
 }

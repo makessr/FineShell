@@ -218,6 +218,12 @@ async fn request<T: DeserializeOwned>(
     match response.status() {
         StatusCode::OK => {}
         StatusCode::UNAUTHORIZED => return Err("账号、密码或登录状态无效，请重新登录".into()),
+        StatusCode::FORBIDDEN if matches!(path, "register" | "registration/verify") => {
+            return Err("邀请码、邮箱或验证码无效，请核对后重试".into());
+        }
+        StatusCode::SERVICE_UNAVAILABLE if path == "registration/verify" => {
+            return Err("邮件发送暂不可用，请稍后重试".into());
+        }
         StatusCode::CONFLICT => return Err("资源发生冲突，请重试或检查账号是否已注册".into()),
         StatusCode::TOO_MANY_REQUESTS => return Err("请求过于频繁，请稍后再试".into()),
         status => return Err(format!("同步服务返回 HTTP {status}")),
@@ -583,10 +589,44 @@ pub(crate) fn host_sync_account() -> CommandResult<Option<Account>> {
         .map_err(|e| error("host_sync_account", e))
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RegistrationProof {
+    invite_code: String,
+    verification_code: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VerificationRequest {
+    email: String,
+    invite_code: String,
+}
+
 #[tauri::command]
+pub(crate) async fn host_sync_registration(
+    server: String,
+    verification: Option<VerificationRequest>,
+) -> CommandResult<Value> {
+    let result = async {
+        let server = server_url(&server)?;
+        if let Some(verification) = verification {
+            request(&server, Method::POST, "registration/verify", None, Some(json!(verification))).await
+        } else {
+            match request(&server, Method::GET, "registration", None, None).await {
+                Err(message) if message.starts_with("同步服务返回 HTTP 404 ") => Ok(json!({ "mode": "open" })),
+                result => result,
+            }
+        }
+    }.await;
+    result.map_err(|e| error("host_sync_registration", e))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn host_sync_login(
     server: String, email: String, password: String, recovery_key: String, register: bool,
-    bound_account: Option<String>, device_name: Option<String>,
+    bound_account: Option<String>, device_name: Option<String>, proof: Option<RegistrationProof>,
 ) -> CommandResult<Account> {
     let result = async {
         let server = server_url(&server)?;
@@ -602,9 +642,12 @@ pub(crate) async fn host_sync_login(
             return Err("此 FineShell 配置已绑定同步账号".into());
         }
         let path = if register { "register" } else { "login" };
-        let login: Login = request(&server, Method::POST, path, None, Some(json!({
-            "email": email, "password": password, "deviceName": device_name,
-        }))).await?;
+        let mut body = json!({ "email": email, "password": password, "deviceName": device_name });
+        if let Some(proof) = proof.filter(|_| register) {
+            body["inviteCode"] = json!(proof.invite_code);
+            body["verificationCode"] = json!(proof.verification_code);
+        }
+        let login: Login = request(&server, Method::POST, path, None, Some(body)).await?;
         if bound_account.as_ref().is_some_and(|id| id != &login.account_id) {
             return Err("此 FineShell 配置已绑定另一个同步账号".into());
         }
@@ -663,12 +706,17 @@ pub(crate) async fn host_sync_devices(
     account_id: String,
     revoke: Option<String>,
     mark_synced: Option<bool>,
+    rename: Option<String>,
 ) -> CommandResult<Vec<DeviceInfo>> {
     let result = async {
         let device = require_device(&account_id)?;
         if mark_synced == Some(true) {
             request::<Value>(&device.server, Method::POST, "devices/synced", Some(&device.token), None).await?;
             return Ok(Vec::new());
+        }
+        if let Some(name) = rename {
+            request::<Value>(&device.server, Method::POST, "devices/name", Some(&device.token),
+                Some(json!({ "name": name }))).await?;
         }
         if let Some(id) = revoke {
             if id.len() != 32 || !id.bytes().all(|ch| ch.is_ascii_hexdigit()) {

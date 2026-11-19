@@ -1,5 +1,5 @@
 .terminal-panel {
-  --terminal-ai-action-width: 78px;
+  --terminal-ai-action-width: 112px;
   --terminal-home-tab-width: 92px;
   --terminal-tab-height: 36px;
   position: relative;
@@ -181,7 +181,8 @@
 }
 
 .terminal-ai-action,
-.terminal-split-action {
+.terminal-split-action,
+.terminal-workspaces-action {
   position: absolute;
   top: 3px;
   right: 8px;
@@ -197,6 +198,10 @@
 
 .terminal-split-action {
   right: 42px;
+}
+
+.terminal-workspaces-action {
+  right: 76px;
 }
 
 .terminal-ai-action > span,

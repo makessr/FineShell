@@ -1,10 +1,11 @@
 {
-  "version": 38,
+  "version": 39,
   "commands": {
     "protocol_version": true,
     "host_sync_account": true,
     "host_sync_recovery_key": true,
     "host_sync_login": true,
+    "host_sync_registration": true,
     "host_sync_logout": true,
     "host_sync_devices": true,
     "host_sync_exchange": true,
@@ -16,6 +17,7 @@
     "application_update_close": true,
     "application_update_test_route": true,
     "read_config_file": true,
+    "ssh_config_include_files": true,
     "write_config_file": true,
     "cloud_backup_store_s3_credentials": true,
     "cloud_backup_delete_s3_credentials": true,

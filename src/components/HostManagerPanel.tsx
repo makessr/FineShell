@@ -54,6 +54,7 @@ import HostConnectionHistoryModal, {
 import {
   jumpHostSelectionError,
   normalizeHostForm,
+  resolveManagedPrivateKey,
 } from "../host-storage";
 import {
   buildHostTableTree,
@@ -65,7 +66,7 @@ import {
   loadConfiguration,
   updateConfiguration,
 } from "../config-database";
-import { mergeSshConfig, parseSshConfig } from "../ssh-config-import";
+import { expandSshConfig, mergeSshConfig, parseSshConfig } from "../ssh-config-import";
 import {
   moveHostToTrash,
   purgeExpiredDeletedHosts,
@@ -199,15 +200,6 @@ function isInteractiveRowTarget(target: EventTarget | null) {
       ),
     )
   );
-}
-
-function resolveManagedPrivateKey(
-  host: HostRecord,
-  sshKeys: SshKeyRecord[],
-) {
-  if (host.authMethod !== "privateKey" || !host.sshKeyId) return host;
-  const sshKey = sshKeys.find((item) => item.id === host.sshKeyId);
-  return sshKey ? { ...host, privateKeyPath: sshKey.privateKeyPath } : undefined;
 }
 
 interface HostManagerPanelProps {
@@ -941,7 +933,11 @@ function HostManagerPanel({ onConnect, settings }: HostManagerPanelProps) {
                   try {
                     const path = await open({ multiple: false, directory: false, title: "选择 OpenSSH 配置文件" });
                     if (typeof path === "string") {
-                      setSshImportContents(await invoke<string>("read_config_file", { path }));
+                      setSshImportContents(await expandSshConfig(
+                        path,
+                        (file) => invoke<string>("read_config_file", { path: file }),
+                        (pattern) => invoke<string[]>("ssh_config_include_files", { root: path, pattern }),
+                      ));
                     }
                   } catch (error) {
                     Message.error(commandErrorMessage(error));

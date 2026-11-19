@@ -1,5 +1,11 @@
-import type { HostFormValues, HostRecord } from "./models";
+import type { HostFormValues, HostRecord, SshKeyRecord } from "./models";
 import { normalizeGroupPath } from "./host-organization";
+
+export function resolveManagedPrivateKey(host: HostRecord, sshKeys: SshKeyRecord[]) {
+  if (host.authMethod !== "privateKey" || !host.sshKeyId) return host;
+  const key = sshKeys.find(({ id }) => id === host.sshKeyId);
+  return key ? { ...host, privateKeyPath: key.privateKeyPath } : undefined;
+}
 
 type StoredHostRecord = Omit<
   HostRecord,

@@ -1867,7 +1867,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fineshell"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "aws-credential-types",
@@ -1878,6 +1878,7 @@ dependencies = [
  "chacha20poly1305",
  "fast-socks5",
  "futures-util",
+ "glob",
  "httparse",
  "keyring",
  "log",

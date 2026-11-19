@@ -235,6 +235,7 @@ export function useTerminalSessions({
       setSessions(next);
       setActiveSessionId(session.id);
       void connectSession(session);
+      return session.id;
     },
     [connectSession],
   );

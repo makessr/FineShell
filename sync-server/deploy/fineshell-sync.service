@@ -9,6 +9,7 @@ StateDirectory=fineshell-sync
 StateDirectoryMode=0700
 Environment=FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite
 Environment=FINESHELL_SYNC_PORT=8787
+EnvironmentFile=-/etc/fineshell-sync/sync.env
 ExecStart=/opt/fineshell-sync/node/bin/node /opt/fineshell-sync/server.mjs
 Restart=on-failure
 RestartSec=3s

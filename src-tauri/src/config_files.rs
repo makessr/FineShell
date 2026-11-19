@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::protocol::{CommandError, CommandResult};
 
@@ -17,6 +20,57 @@ fn read_config_file_inner(path: String) -> Result<String, String> {
     }
 
     fs::read_to_string(path).map_err(|error| format!("无法读取配置文件: {error}"))
+}
+
+#[tauri::command]
+pub fn ssh_config_include_files(root: String, pattern: String) -> CommandResult<Vec<String>> {
+    resolve_ssh_config_include(&root, &pattern)
+        .map_err(|error| CommandError::from_message("ssh_config_include_files", error))
+}
+
+fn resolve_ssh_config_include(root: &str, pattern: &str) -> Result<Vec<String>, String> {
+    if pattern.is_empty() || pattern.contains(['%', '$']) {
+        return Err("Include 路径包含不支持的占位符".into());
+    }
+    let path = Path::new(pattern);
+    let expanded = if let Some(relative) = pattern
+        .strip_prefix("~/")
+        .or_else(|| pattern.strip_prefix("~\\"))
+    {
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .ok_or("无法确定用户的主目录")?;
+        PathBuf::from(home).join(relative)
+    } else if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        if pattern.starts_with('~') {
+            return Err("Include 仅支持当前用户的 ~/ 路径".into());
+        }
+        Path::new(root)
+            .parent()
+            .ok_or("无法确定配置文件目录")?
+            .join(path)
+    };
+    let mut files = Vec::new();
+    let pattern = expanded.to_str().ok_or("Include 路径不是 UTF-8")?;
+    for result in glob::glob(pattern).map_err(|error| format!("Include 路径无效: {error}"))? {
+        let path = result.map_err(|error| format!("无法读取 Include 路径: {error}"))?;
+        if !path.is_file() {
+            continue;
+        }
+        if files.len() >= 128 {
+            return Err("Include 匹配的文件过多".into());
+        }
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("无法读取 Include 路径: {error}"))?;
+        files.push(
+            path.into_os_string()
+                .into_string()
+                .map_err(|_| "Include 路径不是 UTF-8")?,
+        );
+    }
+    Ok(files)
 }
 
 #[tauri::command]
@@ -43,7 +97,9 @@ fn write_config_file_inner(path: String, contents: String) -> Result<(), String>
 mod tests {
     use std::{fs, time::SystemTime};
 
-    use super::{read_config_file, write_config_file, MAX_CONFIG_FILE_BYTES};
+    use super::{
+        read_config_file, resolve_ssh_config_include, write_config_file, MAX_CONFIG_FILE_BYTES,
+    };
 
     fn temporary_directory(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -54,6 +110,31 @@ mod tests {
             "fineshell-config-{name}-{}-{unique}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn ssh_include_matches_only_files_in_lexical_order() {
+        let directory = temporary_directory("ssh-include");
+        let includes = directory.join("config.d");
+        fs::create_dir_all(includes.join("directory.conf")).unwrap();
+        fs::write(includes.join("20.conf"), "Host second").unwrap();
+        fs::write(includes.join("10.conf"), "Host first").unwrap();
+        fs::write(includes.join("ignored.txt"), "ignored").unwrap();
+
+        let root = directory.join("config");
+        let files = resolve_ssh_config_include(root.to_str().unwrap(), "config.d/*.conf").unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .map(|path| {
+                std::path::Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(names, ["10.conf", "20.conf"]);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

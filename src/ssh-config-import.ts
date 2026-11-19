@@ -33,6 +33,52 @@ function words(line: string) {
   return parts;
 }
 
+const directiveLine = /^(\s*[a-z][\w-]*)\s*=\s*/i;
+
+export async function expandSshConfig(
+  root: string,
+  read: (path: string) => Promise<string>,
+  resolve: (pattern: string) => Promise<string[]>,
+) {
+  const active = new Set<string>();
+  const maxBytes = 5 * 1024 * 1024;
+  let bytes = 0;
+  let files = 0;
+  async function expand(path: string): Promise<string> {
+    if (active.has(path)) throw new Error("OpenSSH Include 存在循环引用");
+    if (active.size >= 16 || ++files > 128) throw new Error("OpenSSH Include 文件过多或嵌套过深");
+    const contents = (await read(path)).replace(/^\uFEFF/, "");
+    bytes += new TextEncoder().encode(contents).byteLength;
+    if (bytes > maxBytes) throw new Error("OpenSSH 配置总大小超过 5 MB");
+    active.add(path);
+    try {
+      const result: string[] = [];
+      let inHost = false;
+      for (const line of contents.split(/\r?\n/)) {
+        const [keyword, ...values] = words(line.replace(directiveLine, "$1 "));
+        const directive = keyword?.toLowerCase();
+        if (directive === "match") throw new Error("当前只支持导入 Host 配置，不能导入 Match 条件");
+        if (directive === "host") inHost = true;
+        if (directive !== "include") {
+          result.push(line);
+          continue;
+        }
+        if (inHost) throw new Error("请将 Include 移到 Host 段落之前再导入");
+        if (!values.length) throw new Error("Include 缺少文件路径");
+        for (const pattern of values) {
+          for (const child of await resolve(pattern)) {
+            result.push(await expand(child), "Host *");
+          }
+        }
+      }
+      return result.join("\n");
+    } finally {
+      active.delete(path);
+    }
+  }
+  return expand(root);
+}
+
 function matches(pattern: string, alias: string) {
   const regex = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
   return new RegExp("^" + regex + "$", "i").test(alias);

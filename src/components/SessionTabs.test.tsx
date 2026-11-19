@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { HostRecord, TerminalSession } from "../models";
 import SessionTabs from "./SessionTabs";
 
@@ -83,6 +83,52 @@ describe("SessionTabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "终端布局" }));
     fireEvent.click(screen.getByText("单窗口"));
     expect(restored.container.querySelector(".terminal-panes-columns")).toBeNull();
+  });
+
+  test("saves host references and reopens the named workspace with its ordered panes", async () => {
+    const workspacesKey = "fineshell.terminal.workspaces";
+    const splitKey = "fineshell.terminal.splitDirection";
+    const second = { ...SESSION, id: "second-session", host: { ...HOST, id: "second-host" } };
+    const start = mock(async () => ["fresh-first", "fresh-second"]);
+    const activate = mock(() => undefined);
+    const props = {
+      aiAssistantVisible: false,
+      hasActiveSession: true,
+      homeContent: null,
+      onActiveSessionChange: activate,
+      onCloseSession: () => undefined,
+      onOpenWorkspace: start,
+      onToggleAiAssistant: () => undefined,
+      renderSession: (session: TerminalSession) => session.id,
+      sessionContextMenuItems: () => [],
+    };
+    localStorage.removeItem(workspacesKey);
+    try {
+      const original = render(<SessionTabs {...props} activeSessionId={second.id} sessions={[SESSION, second]} />);
+      fireEvent.click(screen.getByRole("button", { name: "终端布局" }));
+      fireEvent.click(screen.getByText("上下分屏"));
+      fireEvent.click(screen.getByRole("button", { name: "SSH 工作区" }));
+      fireEvent.change(screen.getByRole("textbox", { name: "工作区名称" }), { target: { value: "运维" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存当前会话" }));
+      const [saved] = JSON.parse(localStorage.getItem(workspacesKey)!);
+      expect(saved.hostIds).toEqual([HOST.id, second.host.id]);
+      expect(saved.panes).toEqual([1, 0]);
+      expect(saved.layout).toBe("rows");
+      original.unmount();
+      const fresh = render(<SessionTabs {...props} hasActiveSession={false} activeSessionId={null} sessions={[]} />);
+      fireEvent.click(screen.getByRole("button", { name: "SSH 工作区" }));
+      fireEvent.click(screen.getByRole("button", { name: "打开" }));
+      await waitFor(() => expect(activate).toHaveBeenCalledWith("fresh-second"));
+      expect(start).toHaveBeenCalledWith([HOST.id, second.host.id]);
+      fresh.rerender(<SessionTabs {...props} activeSessionId="fresh-second" sessions={[
+        { ...SESSION, id: "fresh-first" }, { ...second, id: "fresh-second" },
+      ]} />);
+      expect(fresh.container.querySelector(".terminal-panes-rows")).not.toBeNull();
+      expect(screen.getAllByRole("region").map((pane) => pane.style.order)).toEqual(["1", "0"]);
+    } finally {
+      localStorage.removeItem(workspacesKey);
+      localStorage.removeItem(splitKey);
+    }
   });
 
   test("keeps the fixed home entry outside the scrollable tabs", () => {

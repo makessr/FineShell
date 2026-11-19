@@ -1,0 +1,27 @@
+services:
+  sync:
+    build: .
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      FINESHELL_SYNC_REGISTRATION: ${FINESHELL_SYNC_REGISTRATION:-open}
+      FINESHELL_SYNC_MAIL_PROVIDER: ${FINESHELL_SYNC_MAIL_PROVIDER:-resend}
+      FINESHELL_SYNC_MAIL_FROM: ${FINESHELL_SYNC_MAIL_FROM:-}
+      FINESHELL_SYNC_SMTP_HOST: ${FINESHELL_SYNC_SMTP_HOST:-}
+      FINESHELL_SYNC_SMTP_PORT: ${FINESHELL_SYNC_SMTP_PORT:-465}
+      FINESHELL_SYNC_SMTP_USER: ${FINESHELL_SYNC_SMTP_USER:-}
+      FINESHELL_SYNC_SMTP_PASSWORD: ${FINESHELL_SYNC_SMTP_PASSWORD:-}
+      FINESHELL_SYNC_RESEND_API_KEY: ${FINESHELL_SYNC_RESEND_API_KEY:-}
+    volumes:
+      - vault:/data
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  vault:
