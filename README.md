@@ -41,9 +41,11 @@ SSH 工作区可保存当前窗口的已保存主机会话及分屏布局，之�
 
 ## 界面预览
 
+截图来自 FineShell v0.5.0 Windows 客户端。主机、文件和诊断结果使用演示数据，AI 回复由本地演示接口提供。
+
 ### 主机首页
 
-通过分组树形表格集中管理主机，支持搜索、排序、新增主机和连接历史；
+通过分组树形表格集中管理主机，支持搜索、排序、新增主机和查看连接历史。
 
 ![FineShell 主机首页](docs/screenshots/home.png)
 
@@ -75,7 +77,7 @@ SSH 工作区可保存当前窗口的已保存主机会话及分屏布局，之�
 
 FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务器状态、终端输出和远程文件理解问题，通过受控工具完成信息采集，并在执行终端命令或修改文件前按照当前审批模式处理授权。
 
-![FineShell AI 运维助手：服务器诊断、命令审批与执行过程](docs/screenshots/ai-assistant.png)
+![FineShell AI 运维助手在 SSH 工作区展示演示主机的诊断回复](docs/screenshots/ai-assistant.png)
 
 #### 主要能力
 
@@ -214,6 +216,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 ## 主机账号同步
 
 在「设置 → 主机同步」中创建账号或登录，默认使用 `https://auto.itfans.fun`，也可以填写自建同步服务地址。
+
+![FineShell 设置中的主机同步登录页](docs/screenshots/host-sync.png)
 
 1. 在第一台设备创建账号，妥善保存生成的恢复密钥。
 2. 在另一台设备登录同一账号并输入恢复密钥。应用自动同步已保存的主机、分组和相关 SSH 凭据。
