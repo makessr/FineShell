@@ -56,18 +56,25 @@ $oldFlags = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
 $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $workspace 'WebView2'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port --remote-debugging-address=127.0.0.1"
 $marker = [guid]::NewGuid().ToString('N')
-$policyPath = 'HKLM:/Software/Policies/Microsoft/Edge/WebView2/AdditionalBrowserArguments'
 $policyName = 'fineshell.exe'
-$policyAdded = $false
+$runnerPolicyRoot = 'HKLM:/Software/Policies/Microsoft/Edge/WebView2'
+$runnerPolicies = @{
+    AdditionalBrowserArguments = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+    UserDataFolder = $env:WEBVIEW2_USER_DATA_FOLDER
+}
+$createdPolicies = @()
 
 try {
     if ($UseHostedRunnerWebView2Policy) {
-        if (!(Test-Path -LiteralPath $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
-        if ((Get-Item -LiteralPath $policyPath).GetValueNames() -contains $policyName) {
-            throw 'FineShell already has a machine WebView2 policy.'
+        foreach ($policy in $runnerPolicies.GetEnumerator()) {
+            $policyPath = Join-Path $runnerPolicyRoot $policy.Key
+            if (!(Test-Path -LiteralPath $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+            if ((Get-Item -LiteralPath $policyPath).GetValueNames() -contains $policyName) {
+                throw "FineShell already has a machine WebView2 $($policy.Key) policy."
+            }
+            New-ItemProperty -LiteralPath $policyPath -Name $policyName -Value $policy.Value -PropertyType String | Out-Null
+            $createdPolicies += $policyPath
         }
-        New-ItemProperty -LiteralPath $policyPath -Name $policyName -Value $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -PropertyType String | Out-Null
-        $policyAdded = $true
     }
     $setup = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$install" -WindowStyle Hidden -Wait -PassThru
     if ($setup.ExitCode -ne 0 -or (Get-TestVersion) -ne $Baseline) { throw 'The baseline installation failed.' }
@@ -110,7 +117,7 @@ try {
     & $Node (Join-Path $PSScriptRoot 'ota.mjs') verify $port $Baseline $Target $marker
     if ($LASTEXITCODE) { throw 'The upgraded application failed runtime verification.' }
 } finally {
-    if ($policyAdded) { Remove-ItemProperty -LiteralPath $policyPath -Name $policyName }
+    foreach ($policyPath in $createdPolicies) { Remove-ItemProperty -LiteralPath $policyPath -Name $policyName }
     Close-TestProcess
     $uninstaller = Join-Path $install 'uninstall.exe'
     if (Test-Path -LiteralPath $uninstaller) {
