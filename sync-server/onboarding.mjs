@@ -39,7 +39,7 @@ export function createInvite(db, email) {
 }
 
 export function createOnboarding(db, { registration = "open", sendVerification } = {}) {
-  if (registration !== "open" && registration !== "invite") throw new Error("Invalid registration mode");
+  if (!["open", "invite", "closed"].includes(registration)) throw new Error("Invalid registration mode");
   if (registration === "invite" && !sendVerification) throw new Error("Invite registration requires a mail sender");
   initializeOnboarding(db);
   const readInvite = db.prepare("SELECT 1 FROM invites WHERE invite_hash = ? AND email = ? AND expires_at > ?");
@@ -63,6 +63,7 @@ export function createOnboarding(db, { registration = "open", sendVerification }
   }
   function authorized(email, body, now = Date.now()) {
     if (registration === "open") return true;
+    if (registration === "closed") return false;
     const invite = inviteFor(email, body.inviteCode, now);
     return Boolean(invite && typeof body.verificationCode === "string" &&
       tokenPattern.test(body.verificationCode) && readCode.get(invite, hash(body.verificationCode), now));

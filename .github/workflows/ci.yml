@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "26"
       - run: npm ci --prefix sync-server --ignore-scripts
-      - run: node --test sync-server/server.integration.mjs
+      - run: node --test sync-server/*.integration.mjs
 
   frontend:
     name: Frontend tests and build

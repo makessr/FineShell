@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server.mjs onboarding.mjs ./
-COPY deploy/backup-snapshot.mjs ./
+COPY deploy/backup-snapshot.mjs deploy/portable-backup.mjs ./
 RUN mkdir /data && chown node:node /data
 USER node
 ENV FINESHELL_SYNC_DATABASE=/data/vault.sqlite

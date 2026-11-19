@@ -67,14 +67,30 @@ test("invite and verification are bound to one email, consumed once, and allow a
     assert.equal(sent.length, 1);
     assert.equal(sent[0].email, email);
     assert.equal((await post("register", { ...registration, verificationCode: "incorrect" })).status, 403);
-    const proof = { ...registration, verificationCode: sent[0].code };
-    const results = await Promise.all([post("register", proof), post("register", proof)]);
-    assert.deepEqual(results.map(({ status }) => status).sort(), [200, 403]);
+    const bytes = (length) => randomBytes(length).toString("base64");
+    const vault = {
+      version: 1,
+      wrappedKey: { algorithm: "XChaCha20-Poly1305", kdf: "Argon2id",
+        salt: bytes(16), nonce: bytes(24), ciphertext: bytes(48) },
+      nonce: bytes(24), ciphertext: bytes(96),
+    };
+    const proof = { ...registration, verificationCode: sent[0].code,
+      accountId: randomBytes(16).toString("hex"), vault };
+    assert.equal((await post("register", proof)).status, 200);
+    assert.equal((await post("register", {
+      ...proof, inviteCode: undefined, verificationCode: undefined,
+      vault: { ...vault, ciphertext: bytes(96) },
+    })).status, 200);
+    assert.equal((await post("register", { ...proof, accountId: "0".repeat(32) })).status, 403);
+    assert.equal((await post("register", { ...proof, password: "incorrect-password" })).status, 401);
     const login = await post("login", { email, password: registration.password });
     assert.equal(login.status, 200);
     const { token } = await login.json();
     assert.equal((await post("devices/name", { name: "  Linux workstation  " }, token)).status, 200);
-    const devices = await fetch(base + "devices", { headers: { authorization: "Bearer " + token } });
+    const headers = { authorization: "Bearer " + token };
+    const stored = await fetch(base + "vault", { headers });
+    assert.deepEqual(await stored.json(), { revision: 1, vault });
+    const devices = await fetch(base + "devices", { headers });
     assert.equal((await devices.json()).find((device) => device.current).name, "Linux workstation");
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -235,8 +251,13 @@ test("sync isolates accounts and accepts only the current revision", async () =>
       method: "PUT", token: first.token, body: { revision: 1, vault: nextVault },
     })).data.revision, 2);
     await new Promise((resolve) => server.close(resolve));
-    server = createSyncServer(snapshot);
+    server = createSyncServer(snapshot, { registration: "closed" });
     origin = await start();
+    assert.deepEqual((await call("registration")).data, { mode: "closed" });
+    assert.equal((await call("register", {
+      method: "POST", body: { ...body, email: "closed@example.com" },
+    })).status, 403);
+    assert.equal((await call("login", { method: "POST", body })).status, 200);
     assert.deepEqual((await call("vault", { token: login.data.token })).data,
       { revision: 1, vault });
     const repaired = { ...nextVault, ciphertext: bytes(144) };
@@ -252,7 +273,24 @@ test("sync isolates accounts and accepts only the current revision", async () =>
     assert.deepEqual((await call("vault", { token: login.data.token })).data, { revision: 3, vault: repaired });
     assert.equal((await call("devices/" + second.id, { method: "DELETE", token: first.token })).status, 200);
     assert.equal((await call("vault", { token: login.data.token })).status, 401);
-    assert.equal((await call("logout", { method: "POST", token: first.token })).status, 200);
+    const newLogin = await call("login", { method: "POST", body });
+    const rotatedVault = { ...repaired, ciphertext: bytes(160),
+      wrappedKey: { ...vault.wrappedKey, salt: bytes(16) } };
+    const rotate = (revision) => call("vault/rotate-key", {
+      method: "POST", token: first.token, body: { revision, vault: rotatedVault },
+    });
+    assert.equal((await rotate(2)).status, 409);
+    assert.equal((await call("vault", { token: newLogin.data.token })).status, 200);
+    const rotation = await rotate(3);
+    assert.equal(rotation.status, 200);
+    assert.equal(rotation.data.revision, 4);
+    assert.equal((await call("vault", { token: newLogin.data.token })).status, 401);
+    assert.deepEqual((await call("vault", { token: rotation.data.token })).data,
+      { revision: 4, vault: rotatedVault });
+    const afterRotation = await call("devices", { token: rotation.data.token });
+    assert.deepEqual(afterRotation.data.map(({ id, current }) => ({ id, current })),
+      [{ id: current.id, current: true }]);
+    assert.equal((await call("logout", { method: "POST", token: rotation.data.token })).status, 200);
     assert.equal((await call("vault", { token: first.token })).status, 401);
     assert.equal((await call("devices", { token: first.token })).status, 401);
   } finally {

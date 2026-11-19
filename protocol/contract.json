@@ -1,5 +1,5 @@
 {
-  "version": 40,
+  "version": 41,
   "commands": {
     "protocol_version": true,
     "host_sync_account": true,
@@ -9,6 +9,7 @@
     "host_sync_logout": true,
     "host_sync_devices": true,
     "host_sync_exchange": true,
+    "host_sync_rotate_key": true,
     "host_sync_probe": true,
     "host_sync_apply": true,
     "open_settings_window": true,

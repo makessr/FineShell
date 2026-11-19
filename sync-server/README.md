@@ -36,7 +36,7 @@ curl --fail http://127.0.0.1:8787/healthz
 sudo install -d -m 0755 /opt/fineshell-sync
 sudo install -d -m 0700 /etc/fineshell-sync
 sudo install -m 0644 sync-server/server.mjs sync-server/onboarding.mjs sync-server/package.json sync-server/package-lock.json /opt/fineshell-sync/
-sudo install -m 0644 sync-server/deploy/backup-snapshot.mjs /opt/fineshell-sync/
+sudo install -m 0644 sync-server/deploy/{backup-snapshot,portable-backup}.mjs /opt/fineshell-sync/
 sudo env PATH=/opt/fineshell-sync/node/bin:/usr/bin:/bin /opt/fineshell-sync/node/bin/npm ci --prefix /opt/fineshell-sync --omit=dev --ignore-scripts
 sudo install -m 0644 sync-server/deploy/fineshell-sync.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -52,7 +52,7 @@ systemd 管理 `/var/lib/fineshell-sync`，重启和升级保留数据。发信�
 
 ## 邀请注册与邮箱验证
 
-默认模式 `open` 兼容原有自助注册。启用邀请制时，将服务端配置中的 `FINESHELL_SYNC_REGISTRATION` 设为 `invite`。现有账号可以继续登录。新账号需要管理员分发的邀请码和验证码。邀请码绑定邮箱、七天有效，注册成功后即失效。邮箱验证码有效期为 15 分钟。
+默认模式 `open` 支持自助注册。将 `FINESHELL_SYNC_REGISTRATION` 设为 `closed` 可以关闭新注册，已有账号仍可登录。启用邀请制时，将服务端配置中的 `FINESHELL_SYNC_REGISTRATION` 设为 `invite`。现有账号可以继续登录。新账号需要管理员分发的邀请码和验证码。邀请码绑定邮箱、七天有效，注册成功后即失效。邮箱验证码有效期为 15 分钟。
 
 可使用自建 SMTP 或 Resend 发信。SMTP 465 使用隐式 TLS，SMTP 587 使用强制 STARTTLS，两种方式都验证证书。
 
@@ -91,6 +91,17 @@ sudo env FINESHELL_SYNC_DATABASE=/var/lib/fineshell-sync/vault.sqlite /opt/fines
 docker compose exec sync node backup-snapshot.mjs /data/backups
 ```
 
+跨系统恢复可以使用 AES-256-GCM 加密的备份。生成一次专用随机密钥，把密钥文件和备份分开保存。每次备份使用不同的目标文件名。恢复需要可写的父目录，已有数据库文件会受到保护。
+
+```bash
+umask 077
+openssl rand -out /secure/fineshell-backup.key 32
+node portable-backup.mjs backup /data/vault.sqlite /offsite/fineshell-2026-11-19.backup /secure/fineshell-backup.key
+node portable-backup.mjs restore /offsite/fineshell-2026-11-19.backup /fresh/vault.sqlite /secure/fineshell-backup.key
+```
+
+恢复命令会验证加密认证标签和 SQLite 完整性，清除旧会话、邀请码和邮箱验证码，再写出恢复文件。启动新实例后，先用旧账号密码和恢复密钥重新登录并同步，再切换域名。若备份早于最近一次恢复密钥更换，快照仍使用备份时的恢复密钥。演练使用测试数据和独立目录。
+
 Linux 快照仍包含账号与会话数据。将快照转存到受访问控制的加密异机存储。Compose 可用 `docker compose cp sync:/data/backups/<快照文件> .` 取回已完成的快照。
 
 在另一台 Windows 电脑上运行 PowerShell 7。确认任务账号可以使用已固定的服务器主机指纹通过 SSH 登录。脚本使用 SQLite 在线备份 API 生成一致快照，给快照加上 Windows DPAPI 当前用户保护，再保存到本地。使用任务计划程序时让同一个 Windows 用户执行脚本。电脑关机或该账号未登录期间，备份可能延迟。
@@ -109,5 +120,5 @@ pwsh -File ./sync-server/deploy/backup-to-windows.ps1 `
 
 ```powershell
 npm ci --prefix sync-server --ignore-scripts
-node --test sync-server/server.integration.mjs
+node --test sync-server/server.integration.mjs sync-server/portable-backup.integration.mjs
 ```

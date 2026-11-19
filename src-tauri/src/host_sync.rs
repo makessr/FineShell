@@ -51,6 +51,8 @@ struct Device {
     account_id: String,
     token: String,
     key: [u8; 32],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_key: Option<[u8; 32]>,
     wrapped_key: WrappedMasterKey,
 }
 
@@ -278,10 +280,21 @@ fn seal(device: &Device, revision: u64, records: &Records) -> Result<Vault, Stri
 }
 
 fn open(device: &Device, vault: &Vault) -> Result<(u64, Records), String> {
+    open_with_key(device, &device.key, vault)
+}
+
+fn open_local_base(device: &Device, vault: &Vault) -> Result<(u64, Records), String> {
+    open(device, vault).or_else(|error| match &device.previous_key {
+        Some(key) => open_with_key(device, key, vault),
+        None => Err(error),
+    })
+}
+
+fn open_with_key(device: &Device, key: &[u8; 32], vault: &Vault) -> Result<(u64, Records), String> {
     if vault.version != 1 {
         return Err("主机同步数据版本不受支持".into());
     }
-    let bytes = decrypt_payload(&device.key, &vault.nonce, &vault.ciphertext)
+    let bytes = decrypt_payload(key, &vault.nonce, &vault.ciphertext)
         .map_err(|_| "无法解密同步数据，请重新登录并检查恢复密钥")?;
     let (format, account, revision, records): (String, String, u64, Records) =
         serde_json::from_slice(&bytes).map_err(|_| "主机同步数据无效")?;
@@ -640,7 +653,7 @@ pub(crate) async fn host_sync_registration(
             request(&server, Method::POST, "registration/verify", None, Some(json!(verification))).await
         } else {
             match request(&server, Method::GET, "registration", None, None).await {
-                Err(message) if message.starts_with("同步服务返回 HTTP 404 ") => Ok(json!({ "mode": "open" })),
+                Err(message) if message.starts_with("同步服务返回 HTTP 404") => Ok(json!({ "mode": "open" })),
                 result => result,
             }
         }
@@ -673,45 +686,75 @@ pub(crate) async fn host_sync_login(
             body["inviteCode"] = json!(proof.invite_code);
             body["verificationCode"] = json!(proof.verification_code);
         }
-        let login: Login = request(&server, Method::POST, path, None, Some(body)).await?;
-        if bound_account.as_ref().is_some_and(|id| id != &login.account_id) {
-            return Err("此 FineShell 配置已绑定另一个同步账号".into());
-        }
-        let remote: RemoteVault = request(&server, Method::GET, "vault", Some(&login.token), None).await?;
-        let (key, wrapped_key) = if let Some(vault) = &remote.vault {
-            if vault.version != 1 || vault.wrapped_key.algorithm != "XChaCha20-Poly1305"
-                || vault.wrapped_key.kdf != "Argon2id"
-            {
-                return Err("同步仓库版本不受支持".into());
-            }
-            let key = unwrap_master_key(&vault.wrapped_key, &recovery_key, true)
-                .map_err(|_| "恢复密钥不正确")?;
-            (key, vault.wrapped_key.clone())
-        } else {
-            if bound_account.is_some() {
-                return Err("已绑定账号的同步仓库不存在，请检查同步服务".into());
-            }
+        if register {
+            // The original recovery key makes retries after a lost response identify the same account.
+            let identity = serde_json::to_vec(&("fineshell-sync-registration-v1",
+                &server, &email, normalized.to_ascii_lowercase()))
+                .map_err(|_| "无法创建同步账号标识")?;
+            let account_id = format!("{:x}", Sha256::digest(identity))[..32].to_owned();
             let key = random_master_key();
-            let wrapped = wrap_master_key(&key, &recovery_key, true)?;
-            (key, wrapped)
-        };
-        let device = Device { server, email, account_id: login.account_id, token: login.token, key, wrapped_key };
-        // Establish the recovery key before another device can initialize the same account.
-        if let Some(vault) = &remote.vault {
-            if open(&device, vault)?.0 != remote.revision {
-                return Err("云端同步版本异常".into());
-            }
-        } else if remote.revision == 0 {
-            let vault = seal(&device, 1, &Records::default())?;
-            request::<Value>(&device.server, Method::PUT, "vault", Some(&device.token), Some(json!({ "revision": 0, "vault": vault }))).await?;
-        } else {
-            return Err("云端同步仓库数据不完整".into());
+            let initial = Device {
+                server: server.clone(), email: email.clone(), account_id: account_id.clone(),
+                token: String::new(), key, previous_key: None, wrapped_key: wrap_master_key(&key, &recovery_key, true)?,
+            };
+            body["accountId"] = json!(account_id);
+            body["vault"] = json!(seal(&initial, 1, &Records::default())?);
         }
-        let encoded = serde_json::to_string(&device).map_err(|_| "无法保存同步登录信息")?;
-        entry()?.set_password(&encoded).map_err(|_| "无法保存同步登录信息到系统凭据库")?;
-        Ok(device.account())
+        let login: Login = request(&server, Method::POST, path, None, Some(body)).await?;
+        let finished = complete_login(&server, email, &login, &recovery_key, bound_account).await;
+        if finished.is_err() {
+            let _ = request::<Value>(&server, Method::POST, "logout", Some(&login.token), None).await;
+        }
+        finished
     }.await;
     result.map_err(|e: String| error("host_sync_login", e))
+}
+
+async fn complete_login(
+    server: &str, email: String, login: &Login, recovery_key: &str, bound_account: Option<String>,
+) -> Result<Account, String> {
+    if bound_account.as_ref().is_some_and(|id| id != &login.account_id) {
+        return Err("此 FineShell 配置已绑定另一个同步账号".into());
+    }
+    let remote: RemoteVault = request(server, Method::GET, "vault", Some(&login.token), None).await?;
+    let (key, wrapped_key) = if let Some(vault) = &remote.vault {
+        if vault.version != 1 || vault.wrapped_key.algorithm != "XChaCha20-Poly1305"
+            || vault.wrapped_key.kdf != "Argon2id"
+        {
+            return Err("同步仓库版本不受支持".into());
+        }
+        let key = unwrap_master_key(&vault.wrapped_key, recovery_key, true)
+            .map_err(|_| "恢复密钥不正确")?;
+        (key, vault.wrapped_key.clone())
+    } else {
+        if bound_account.is_some() {
+            return Err("已绑定账号的同步仓库不存在，请检查同步服务".into());
+        }
+        let key = random_master_key();
+        let wrapped = wrap_master_key(&key, recovery_key, true)?;
+        (key, wrapped)
+    };
+    let previous_key = load_device().ok().flatten()
+        .filter(|device| device.server == server && device.account_id == login.account_id)
+        .and_then(|device| if device.key == key { device.previous_key } else { Some(device.key) });
+    let device = Device {
+        server: server.to_owned(), email, account_id: login.account_id.clone(), token: login.token.clone(),
+        key, previous_key, wrapped_key,
+    };
+    // Establish the recovery key before another device can initialize the same account.
+    if let Some(vault) = &remote.vault {
+        if open(&device, vault)?.0 != remote.revision {
+            return Err("云端同步版本异常".into());
+        }
+    } else if remote.revision == 0 {
+        let vault = seal(&device, 1, &Records::default())?;
+        request::<Value>(&device.server, Method::PUT, "vault", Some(&device.token), Some(json!({ "revision": 0, "vault": vault }))).await?;
+    } else {
+        return Err("云端同步仓库数据不完整".into());
+    }
+    let encoded = serde_json::to_string(&device).map_err(|_| "无法保存同步登录信息")?;
+    entry()?.set_password(&encoded).map_err(|_| "无法保存同步登录信息到系统凭据库")?;
+    Ok(device.account())
 }
 
 #[tauri::command]
@@ -766,7 +809,7 @@ pub(crate) async fn host_sync_probe(
         }
         let device = require_device(&account_id)?;
         let status: VaultStatus = match request(&device.server, Method::GET, "vault/status", Some(&device.token), None).await {
-            Err(message) if message.starts_with("同步服务返回 HTTP 404 ") => return Ok(None),
+            Err(message) if message.starts_with("同步服务返回 HTTP 404") => return Ok(None),
             result => result?,
         };
         Ok(Some(status.revision == known.revision
@@ -774,6 +817,49 @@ pub(crate) async fn host_sync_probe(
             && known.credential_generation == sync_credential_generation()))
     }.await;
     result.map_err(|e: String| error("host_sync_probe", e))
+}
+
+#[tauri::command]
+pub(crate) async fn host_sync_rotate_key(
+    account_id: String, base: Vault, recovery_key: String,
+) -> CommandResult<Vault> {
+    let result = async {
+        let mut device = require_device(&account_id)?;
+        let RemoteVault { revision, vault } =
+            request(&device.server, Method::GET, "vault", Some(&device.token), None).await?;
+        let vault = vault.ok_or("同步账号尚未初始化")?;
+        let (signed_revision, records) = open(&device, &vault)?;
+        let (base_revision, base_records) = open(&device, &base)?;
+        if signed_revision != revision || base_revision != revision || base_records != records {
+            return Err("请先完成一次同步，再更换恢复密钥".into());
+        }
+        if unwrap_master_key(&vault.wrapped_key, &recovery_key, true).is_ok() {
+            return Err("请生成新的恢复密钥".into());
+        }
+        let next = revision.checked_add(1).ok_or("同步版本超出范围")?;
+        let key = random_master_key();
+        device.wrapped_key = wrap_master_key(&key, &recovery_key, true)?;
+        device.previous_key = Some(device.key);
+        device.key = key;
+        let replacement = seal(&device, next, &records)?;
+
+        #[derive(Deserialize)]
+        struct Rotation {
+            revision: u64,
+            token: String,
+        }
+        let rotated: Rotation = request(&device.server, Method::POST, "vault/rotate-key",
+            Some(&device.token), Some(json!({ "revision": revision, "vault": replacement }))).await?;
+        if rotated.revision != next || rotated.token.is_empty() {
+            return Err("无法确认密钥更换，请使用新恢复密钥重新登录".into());
+        }
+        device.token = rotated.token;
+        let encoded = serde_json::to_string(&device).map_err(|_| "无法保存同步登录信息")?;
+        entry()?.set_password(&encoded)
+            .map_err(|_| "无法保存同步登录信息，请使用新恢复密钥重新登录")?;
+        Ok(replacement)
+    }.await;
+    result.map_err(|e: String| error("host_sync_rotate_key", e))
 }
 
 #[tauri::command]
@@ -790,7 +876,7 @@ pub(crate) async fn host_sync_exchange(
             request(&device.server, Method::GET, "vault", Some(&device.token), None).await?;
         let vault = vault.ok_or("同步账号尚未初始化")?;
         let (signed_revision, cloud) = open(&device, &vault)?;
-        let (previous_revision, previous) = base.as_ref().map(|vault| open(&device, vault))
+        let (previous_revision, previous) = base.as_ref().map(|vault| open_local_base(&device, vault))
             .transpose()?.unwrap_or_default();
         if signed_revision != revision || (revision == previous_revision && previous != cloud) {
             return Err("云端同步版本异常，请检查同步服务的数据".into());
@@ -970,6 +1056,7 @@ mod tests {
             account_id: "first".into(),
             token: String::new(),
             key,
+            previous_key: None,
             wrapped_key: wrap_master_key(&key, &recovery, true).unwrap(),
         };
         let empty = Records::default();
@@ -979,7 +1066,11 @@ mod tests {
         let advanced = seal(&device, 18, &empty).unwrap();
         assert!(!verifies_conflict(&device, &advanced, &empty, &empty, &snapshot).unwrap());
         assert_eq!(open(&device, &vault).unwrap().0, 17);
-        device.account_id = "second".into();
+        device.previous_key = Some(device.key);
+        device.key = random_master_key();
         assert!(open(&device, &vault).is_err());
+        assert_eq!(open_local_base(&device, &vault).unwrap().0, 17);
+        device.account_id = "second".into();
+        assert!(open_local_base(&device, &vault).is_err());
     }
 }

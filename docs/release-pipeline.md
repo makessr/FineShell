@@ -36,8 +36,27 @@ GitHub Actions 需要配置仓库密钥 `TAURI_SIGNING_PRIVATE_KEY`，用于生�
 - `src-tauri/Cargo.toml`
 - `src-tauri/Cargo.lock`
 - `CHANGELOG.md`
+- `README.md`
 
 本地可以使用 `bun run release:prepare -- patch` 验证版本准备脚本。该命令会直接修改当前工作区，因此只能在干净的非 `main` 分支执行。
+
+## Windows 桌面验收
+
+在安装了 WebView2、Node.js 26、Bun 和 Rust MSVC 工具链的 Windows 测试机上运行。先在仓库安装 Bun 前端依赖和 `sync-server` 的 npm 依赖。为 SSH 测试另装 `ssh2`，传入其入口文件，测试会使用本地回环地址和合成凭据。
+
+```powershell
+npm ci --prefix sync-server --ignore-scripts
+npm install --prefix "$env:TEMP/FineShellSmokeDeps" --ignore-scripts ssh2
+pwsh -File ./scripts/windows-smoke/sync.ps1 -Ssh2Module "$env:TEMP/FineShellSmokeDeps/node_modules/ssh2/lib/index.js"
+```
+
+脚本在临时目录编译测试应用，为两台模拟设备使用独立的 WebView2 配置、应用标识和系统凭据库命名空间。它通过实际设置界面注册、登录，并验证第二台设备自动收到主机、能用同步的密码和私钥打开 SSH 终端、能读取 SFTP 测试目录，以及更换恢复密钥后旧设备会话失效。正式构建不含测试配置。
+
+OTA 验收需在未安装 FineShell 的独立 Windows 测试用户或虚拟机上跑。从前一版 Release 下载并验签 x64 NSIS 安装包，等待目标版 Release 已公开，再运行以下命令。脚本通过应用内更新下载安装包，确认版本和本地测试数据，并卸载本次测试安装。
+
+```powershell
+pwsh -File ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller ./FineShell_0.4.0_windows_x64-setup.exe -Baseline 0.4.0 -Target 0.4.1
+```
 
 ## 手动恢复
 

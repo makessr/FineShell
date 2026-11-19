@@ -78,6 +78,7 @@ jobs:
           git switch -c "$BRANCH_NAME"
           git add \
             CHANGELOG.md \
+            README.md \
             package.json \
             src-tauri/Cargo.toml \
             src-tauri/Cargo.lock \
@@ -94,7 +95,7 @@ jobs:
             --base main \
             --head "$BRANCH_NAME" \
             --title "准备发布 $RELEASE_TAG" \
-            --body "合并此 PR 后将自动构建并发布 FineShell $RELEASE_TAG。"
+            --body "同步更新版本号、README 和更新日志。三项 CI 通过后合并，将自动构建并发布 FineShell $RELEASE_TAG。"
       - name: Trigger release pull request checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

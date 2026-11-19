@@ -82,8 +82,20 @@ export function hostSyncDevices(accountId: string, revoke?: string, rename?: str
   return invoke<HostSyncDevice[]>("host_sync_devices", { accountId, revoke, rename });
 }
 
+export async function rotateHostSyncKey(accountId: string, recoveryKey: string) {
+  const { hostSyncBase } = await loadConfiguration();
+  if (!hostSyncBase) throw new Error("请先完成一次同步，再更换恢复密钥");
+  const replacement = await invoke<object>("host_sync_rotate_key", {
+    accountId, base: JSON.parse(hostSyncBase), recoveryKey,
+  });
+  await updateConfiguration((current) => current.hostSyncBase === hostSyncBase
+    ? { ...current, hostSyncBase: JSON.stringify(replacement) }
+    : current);
+  void requestHostSync({ manual: true }).catch(() => undefined);
+}
+
 export function hostSyncRegistration(server: string) {
-  return invoke<{ mode: "open" | "invite" }>("host_sync_registration", { server });
+  return invoke<{ mode: "open" | "invite" | "closed" }>("host_sync_registration", { server });
 }
 
 export function sendHostSyncVerification(server: string, email: string, inviteCode: string) {

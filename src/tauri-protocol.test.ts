@@ -32,7 +32,7 @@ describe("Tauri shared protocol", () => {
     expect(contract.events[event]).toBe(true);
     expect(contract.commands.host_sync_login).toBe(true);
     expect(contract.events["host-sync:request"]).toBe(true);
-    expect(Object.keys(contract.commands)).toHaveLength(115);
+    expect(Object.keys(contract.commands)).toHaveLength(116);
     expect(Object.keys(contract.events)).toHaveLength(12);
   });
 
