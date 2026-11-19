@@ -9,8 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/makessr/FineShell/actions/workflows/ci.yml"><img src="https://github.com/makessr/FineShell/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/makessr/FineShell/releases"><img src="https://img.shields.io/github/v/release/makessr/FineShell?display_name=tag&sort=semver" alt="GitHub release" /></a>
+  <a href="https://github.com/makessr/FineShell/releases"><img src="https://img.shields.io/github/v/release/makessr/FineShell?display_name=tag&sort=semver" alt="FineShell 已发布版本" /></a>
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827" alt="React 18" />
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust" alt="Rust stable" />
@@ -122,7 +121,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 下一版的客户端界面将显示“栈渡”。为衔接旧版升级，安装包和更新渠道沿用 FineShell，主机配置和凭据继续使用原有应用标识。
 
-在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 查看对应版本的安装包。应用通过本仓库发布的更新清单检查更新。
+栈渡源码在本仓库维护。现有 FineShell 客户端的安装包与应用内更新仍由原发行仓库提供。 [FineShell 已发布安装包](https://github.com/makessr/FineShell/releases)
 
 | v0.5.0 发布目标 | 安装包 |
 | --- | --- |
@@ -163,8 +162,8 @@ sudo apt --fix-broken install
 ### 启动开发环境
 
 ```bash
-git clone https://github.com/makessr/FineShell.git
-cd FineShell
+git clone https://github.com/makessr/ZhanDu.git
+cd ZhanDu
 bun install --frozen-lockfile
 bun run tauri dev
 ```
