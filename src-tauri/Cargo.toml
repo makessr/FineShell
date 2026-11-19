@@ -56,5 +56,9 @@ tauri-plugin-process = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
+# The default WinCNG build lacks Curve25519 and ECDH.
+ssh2 = { version = "0.9.6", features = ["openssl-on-win32", "vendored-openssl"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
 ssh2 = "0.9.6"
