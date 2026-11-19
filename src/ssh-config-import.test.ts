@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mergeSshConfig, parseSshConfig } from "./ssh-config-import";
+import { expandSshConfig, mergeSshConfig, parseSshConfig } from "./ssh-config-import";
 
 describe("OpenSSH configuration import", () => {
   test("applies first matching values and preserves quoted Windows identity paths", () => {
@@ -42,7 +42,28 @@ Host chain
     expect(result.added).toBe(0);
   });
 
-  test("requires the operator to expand Include and Match directives", () => {
+  test("expands nested includes in order without leaking the last Host block", async () => {
+    const files: Record<string, string> = {
+      config: "Include conf/*.ssh\nUser common\nHost root\n  HostName root.example",
+      first: "Include layers/*\nHost test\n  Port 2200",
+      layer: "Host jump\n  User gateway",
+      second: "Host test\n  Port 2222",
+    };
+    const resolve = async (pattern: string) => pattern === "conf/*.ssh" ? ["first", "second"] : ["layer"];
+    const expanded = await expandSshConfig("config", async (path) => files[path], resolve);
+    const { hosts } = parseSshConfig(expanded, "fallback");
+    expect(hosts.map(({ name, username, port }) => [name, username, port])).toEqual([
+      ["jump", "gateway", 22], ["test", "common", 2200], ["root", "common", 22],
+    ]);
+  });
+
+  test("rejects include cycles and conditional imports", async () => {
+    const resolve = async () => ["config"];
+    await expect(expandSshConfig("config", async () => "Include loop", resolve)).rejects.toThrow("循环");
+    await expect(expandSshConfig("config", async () => "Host scoped\n Include config.d/*", resolve)).rejects.toThrow("Host");
+  });
+
+  test("the text parser rejects unresolved Include and Match directives", () => {
     expect(() => parseSshConfig("Include ~/.ssh/config.d/*", "test")).toThrow("Include");
     expect(() => parseSshConfig("Match exec \"true\"", "test")).toThrow("Match");
   });

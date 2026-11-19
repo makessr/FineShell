@@ -6,6 +6,8 @@ import { commandErrorMessage } from "../tauri-protocol";
 import {
   hostSyncAccount,
   hostSyncDevices,
+  hostSyncRegistration,
+  sendHostSyncVerification,
   relinkHostSyncKey,
   type BlockedSyncRecord,
   type HostSyncDevice,
@@ -31,6 +33,11 @@ export default function HostSyncSettings() {
   );
   const [email, setEmail] = useState("");
   const [deviceName, setDeviceName] = useState("");
+  const [renameDevice, setRenameDevice] = useState<string | null>(null);
+  const [inviteRequired, setInviteRequired] = useState<boolean | null>(null);
+  const [inviteCode, setInviteCode] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
   const [devices, setDevices] = useState<HostSyncDevice[]>([]);
   const [deviceError, setDeviceError] = useState("");
   const [choices, setChoices] = useState<Record<string, boolean>>({});
@@ -81,12 +88,41 @@ export default function HostSyncSettings() {
     return () => { active = false; };
   }, [accountId, status?.signInRequired]);
 
-  async function refreshDevices(revoke?: string) {
+  useEffect(() => {
+    if (!register || !server.trim()) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void hostSyncRegistration(server).then(({ mode }) => {
+        if (current) setInviteRequired(mode === "invite");
+      }).catch((error) => {
+        if (current) Message.error(commandErrorMessage(error));
+      });
+    }, 350);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [register, server]);
+
+  async function sendVerification() {
+    setSendingCode(true);
+    try {
+      await sendHostSyncVerification(server, email, inviteCode.trim());
+      Message.success("验证码已发送，请查收邮件");
+    } catch (error) {
+      Message.error(commandErrorMessage(error));
+    } finally {
+      setSendingCode(false);
+    }
+  }
+
+  async function refreshDevices(revoke?: string, rename?: string) {
     if (!accountId) return;
     setBusy(true);
     try {
-      setDevices(await hostSyncDevices(accountId, revoke));
+      setDevices(await hostSyncDevices(accountId, revoke, rename));
       setDeviceError("");
+      if (rename !== undefined) setRenameDevice(null);
     } catch (error) {
       setDeviceError(commandErrorMessage(error));
     } finally {
@@ -124,6 +160,9 @@ export default function HostSyncSettings() {
       const key = next ? await hostSyncRecoveryKey() : "";
       setRecoveryKey(key);
       setConfirmedKey("");
+      setInviteRequired(null);
+      setInviteCode("");
+      setVerificationCode("");
       setRegister(next);
     } catch (error) {
       Message.error(commandErrorMessage(error));
@@ -134,7 +173,12 @@ export default function HostSyncSettings() {
     event.preventDefault();
     setBusy(true);
     try {
-      setAccount(await signInToHostSync({ server, email, password, recoveryKey, register, deviceName }));
+      const proof = register && inviteRequired
+        ? { inviteCode: inviteCode.trim(), verificationCode: verificationCode.trim() }
+        : undefined;
+      setAccount(await signInToHostSync({ server, email, password, recoveryKey, register, deviceName, proof }));
+      setInviteCode("");
+      setVerificationCode("");
       setStatus(null);
       setRegister(false);
       setRecoveryKey("");
@@ -231,6 +275,15 @@ export default function HostSyncSettings() {
               <Typography.Text type="secondary">
                 {device.lastSyncAt ? new Date(device.lastSyncAt).toLocaleString() : "尚无同步记录"}
               </Typography.Text>
+              {device.current && (renameDevice === null
+                ? <Button onClick={() => setRenameDevice(device.name)}>重命名本机</Button>
+                : <Space>
+                    <Input aria-label="本机新名称" value={renameDevice} onChange={setRenameDevice} maxLength={80} />
+                    <Button disabled={!renameDevice.trim()} loading={busy}
+                      onClick={() => void refreshDevices(undefined, renameDevice.trim())}>保存</Button>
+                    <Button onClick={() => setRenameDevice(null)}>取消</Button>
+                  </Space>
+              )}
               {!device.current && (
                 <Popconfirm content="撤销后，该设备必须重新登录才能同步。"
                   onOk={() => refreshDevices(device.id)}>
@@ -254,11 +307,13 @@ export default function HostSyncSettings() {
         {status?.signInRequired && <Alert type="warning" content={status.message} />}
         <label>
           同步服务地址
-          <Input value={server} onChange={setServer} placeholder="https://sync.example.com" />
+          <Input value={server} onChange={(value) => { setInviteRequired(null); setServer(value); }}
+            placeholder="https://sync.example.com" />
         </label>
         <label>
           邮箱
-          <Input value={email} onChange={setEmail} autoComplete="username" />
+          <Input value={email} onChange={(value) => { setEmail(value); setVerificationCode(""); }}
+            autoComplete="username" />
         </label>
         <label>
           设备名称
@@ -269,6 +324,23 @@ export default function HostSyncSettings() {
           <Input.Password value={password} onChange={setPassword} minLength={12}
             autoComplete={register ? "new-password" : "current-password"} />
         </label>
+        {register && inviteRequired && (
+          <>
+            <label>
+              邀请码
+              <Input.Password value={inviteCode}
+                onChange={(value) => { setInviteCode(value); setVerificationCode(""); }} autoComplete="off" />
+            </label>
+            <Space>
+              <label>
+                邮箱验证码
+                <Input value={verificationCode} onChange={setVerificationCode} autoComplete="one-time-code" />
+              </label>
+              <Button loading={sendingCode} disabled={!email.trim() || !inviteCode.trim()}
+                onClick={() => void sendVerification()}>发送验证码</Button>
+            </Space>
+          </>
+        )}
         {register ? (
           <>
             <Alert type="warning" content="请把恢复密钥存到密码管理器。丢失后，账号密码无法解密云端主机。" />
@@ -290,7 +362,8 @@ export default function HostSyncSettings() {
         <Space>
           <Button type="primary" htmlType="submit" loading={busy}
             disabled={!server || !email || password.length < 12 || !recoveryKey ||
-              (register && recoveryKey !== confirmedKey.trim())}>
+              (register && (inviteRequired === null || recoveryKey !== confirmedKey.trim() ||
+                (inviteRequired && (!inviteCode.trim() || !verificationCode.trim()))))}>
             {register ? "创建账号并同步" : "登录并同步"}
           </Button>
           {!hostSyncIsBound() && (

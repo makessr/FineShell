@@ -1,0 +1,7 @@
+{
+  "name": "fineshell-sync",
+  "private": true,
+  "dependencies": {
+    "nodemailer": "10.6.0"
+  }
+}

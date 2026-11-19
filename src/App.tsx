@@ -26,6 +26,7 @@ import HostManagerPanel from "./components/HostManagerPanel";
 import QuickCommandDrawer from "./components/QuickCommandDrawer";
 import SftpPanel from "./components/SftpPanel";
 import SessionTabs from "./components/SessionTabs";
+import { resolveWorkspaceConnection } from "./terminal-workspaces";
 import AppWorkspaceLayout from "./components/AppWorkspaceLayout";
 import ApplicationTitleBar from "./components/ApplicationTitleBar";
 export { default as CollapsibleSplitTrigger } from "./components/CollapsibleSplitTrigger";
@@ -682,6 +683,15 @@ function App() {
         }
         onActiveSessionChange={setActiveSessionId}
         onCloseSession={closeSession}
+        onOpenWorkspace={async (hostIds) => {
+          const configuration = await loadConfiguration();
+          const targets = hostIds.map((id) => {
+            const host = configuration.hosts.find((item) => item.id === id);
+            if (!host) throw new Error("工作区包含已移除的主机，请重新保存工作区");
+            return resolveWorkspaceConnection(host, configuration);
+          });
+          return targets.map((target) => openSession(...target));
+        }}
         onToggleAiAssistant={toggleAiAssistant}
         renderSession={(session) => (
           <Suspense fallback={null}>

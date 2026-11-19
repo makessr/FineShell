@@ -71,8 +71,16 @@ interface SyncResult {
   blocked?: BlockedSyncRecord[];
 }
 
-export function hostSyncDevices(accountId: string, revoke?: string) {
-  return invoke<HostSyncDevice[]>("host_sync_devices", { accountId, revoke });
+export function hostSyncDevices(accountId: string, revoke?: string, rename?: string) {
+  return invoke<HostSyncDevice[]>("host_sync_devices", { accountId, revoke, rename });
+}
+
+export function hostSyncRegistration(server: string) {
+  return invoke<{ mode: "open" | "invite" }>("host_sync_registration", { server });
+}
+
+export function sendHostSyncVerification(server: string, email: string, inviteCode: string) {
+  return invoke("host_sync_registration", { server, verification: { email, inviteCode } });
 }
 
 export async function relinkHostSyncKey(issue: BlockedSyncRecord, path: string) {
@@ -117,6 +125,7 @@ export async function signInToHostSync(values: {
   recoveryKey: string;
   register: boolean;
   deviceName: string;
+  proof?: { inviteCode: string; verificationCode: string };
 }) {
   const boundAccount = localStorage.getItem(bindingKey);
   const account = await invoke<HostSyncAccount>("host_sync_login", {

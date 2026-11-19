@@ -86,6 +86,7 @@ pub fn run() {
             host_sync::host_sync_account,
             host_sync::host_sync_recovery_key,
             host_sync::host_sync_login,
+            host_sync::host_sync_registration,
             host_sync::host_sync_logout,
             host_sync::host_sync_devices,
             host_sync::host_sync_exchange,
@@ -104,6 +105,7 @@ pub fn run() {
             #[cfg(desktop)]
             updater::application_update_test_route,
             config_files::read_config_file,
+            config_files::ssh_config_include_files,
             config_files::write_config_file,
             cloud_backup::cloud_backup_store_s3_credentials,
             cloud_backup::cloud_backup_delete_s3_credentials,

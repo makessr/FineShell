@@ -7,6 +7,80 @@ import test from "node:test";
 import { createHash, randomBytes } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
 import { createSyncServer } from "./server.mjs";
+import { createInvite, createVerificationMailer, initializeOnboarding } from "./onboarding.mjs";
+
+test("SMTP 465 uses authenticated TLS and sends verification to one recipient", async () => {
+  let options;
+  let message;
+  const sendCode = createVerificationMailer({
+    FINESHELL_SYNC_MAIL_PROVIDER: "smtp",
+    FINESHELL_SYNC_MAIL_FROM: "sync@example.com",
+    FINESHELL_SYNC_SMTP_HOST: "smtp.example.com",
+    FINESHELL_SYNC_SMTP_PORT: "465",
+    FINESHELL_SYNC_SMTP_USER: "user",
+    FINESHELL_SYNC_SMTP_PASSWORD: "test-only-password",
+  }, (value) => {
+    options = value;
+    return { async sendMail(value) { message = value; return { accepted: [value.to.address] }; } };
+  });
+  await sendCode("user@example.com", "example-code");
+  assert.equal(options.secure, true);
+  assert.equal(options.port, 465);
+  assert.equal(options.tls.minVersion, "TLSv1.2");
+  assert.equal(message.to.address, "user@example.com");
+  assert.match(message.text, /example-code/);
+});
+
+test("invite and verification are bound to one email, consumed once, and allow a device rename", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fineshell-invite-"));
+  const database = join(dir, "vault.sqlite");
+  const sent = [];
+  const server = createSyncServer(database, {
+    registration: "invite",
+    sendVerification: async (email, code) => sent.push({ email, code }),
+  });
+  try {
+    const db = new DatabaseSync(database);
+    initializeOnboarding(db);
+    const email = "invitee@example.com";
+    const inviteCode = createInvite(db, email);
+    db.close();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = "http://127.0.0.1:" + server.address().port + "/v1/";
+    async function post(path, body, token) {
+      return fetch(base + path, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(token && { authorization: "Bearer " + token }),
+        },
+        body: JSON.stringify(body),
+      });
+    }
+    assert.deepEqual(await (await fetch(base + "registration")).json(), { mode: "invite" });
+    const registration = { email, password: "test-only-password", inviteCode };
+    assert.equal((await post("register", registration)).status, 403);
+    assert.equal((await post("registration/verify", { email: "other@example.com", inviteCode })).status, 403);
+    assert.equal((await post("registration/verify", { email, inviteCode })).status, 200);
+    assert.equal((await post("registration/verify", { email, inviteCode })).status, 429);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].email, email);
+    assert.equal((await post("register", { ...registration, verificationCode: "incorrect" })).status, 403);
+    const proof = { ...registration, verificationCode: sent[0].code };
+    const results = await Promise.all([post("register", proof), post("register", proof)]);
+    assert.deepEqual(results.map(({ status }) => status).sort(), [200, 403]);
+    const login = await post("login", { email, password: registration.password });
+    assert.equal(login.status, 200);
+    const { token } = await login.json();
+    assert.equal((await post("devices/name", { name: "  Linux workstation  " }, token)).status, 200);
+    const devices = await fetch(base + "devices", { headers: { authorization: "Bearer " + token } });
+    assert.equal((await devices.json()).find((device) => device.current).name, "Linux workstation");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("migrates a legacy session without forcing the device to log in", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fineshell-legacy-sync-"));

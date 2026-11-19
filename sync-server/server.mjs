@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
+import { createVerificationMailer, createOnboarding, normalizedEmail } from "./onboarding.mjs";
 
 const derive = promisify(scrypt);
 const maxVaultBytes = 8 * 1024 * 1024;
@@ -48,9 +49,9 @@ function send(response, status, body) {
 }
 
 function credentials(body) {
-  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const email = normalizedEmail(body.email);
   const password = body.password;
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254 ||
+  if (!email ||
       typeof password !== "string" || password.length < 12 || Buffer.byteLength(password) > 1024) {
     throw new HttpError(400, "Enter a valid email and a password of at least 12 characters");
   }
@@ -80,7 +81,7 @@ function validateVault(vault) {
   };
 }
 
-export function createSyncServer(databasePath) {
+export function createSyncServer(databasePath, options) {
   const db = new DatabaseSync(databasePath);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -113,6 +114,7 @@ export function createSyncServer(databasePath) {
     db.close();
     throw error;
   }
+  const onboarding = createOnboarding(db, options);
   const readAccount = db.prepare("SELECT id, salt, password_hash FROM accounts WHERE email = ?");
   const createAccount = db.prepare("INSERT OR IGNORE INTO accounts (id, email, salt, password_hash) VALUES (?, ?, ?, ?)");
   const readVault = db.prepare("SELECT revision, vault FROM accounts WHERE id = ?");
@@ -128,23 +130,30 @@ export function createSyncServer(databasePath) {
   const recordDeviceSync = db.prepare(
     "UPDATE sessions SET last_sync_at = ? WHERE token_hash = ? AND (last_sync_at IS NULL OR last_sync_at < ?)",
   );
+  const renameDevice = db.prepare("UPDATE sessions SET device_name = ? WHERE token_hash = ? AND expires_at > ?");
   const deleteSession = db.prepare("DELETE FROM sessions WHERE token_hash = ?");
   const pruneSessions = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
   const dummySalt = randomBytes(16);
   const attempts = new Map();
   let deriving = 0;
 
+  function deviceLabel(input) {
+    return typeof input === "string" ? input.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
+  }
+
   async function authenticate(request, register) {
     const body = await readJson(request, 4096);
     const { email, password } = credentials(body);
-    const deviceName = typeof body.deviceName === "string"
-      ? body.deviceName.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
+    const deviceName = deviceLabel(body.deviceName);
     const now = Date.now();
     const recent = (attempts.get(email) ?? []).filter((time) => now - time < 60_000);
     if (recent.length >= 8 || deriving >= 4 || (attempts.size >= 10_000 && !attempts.has(email))) {
       throw new HttpError(429, "Too many attempts. Try again later");
     }
     attempts.set(email, [...recent, now]);
+    if (register && !onboarding.authorized(email, body, now)) {
+      throw new HttpError(403, "Invitation or email verification is invalid");
+    }
     const existing = readAccount.get(email);
     const salt = register ? randomBytes(16) : existing ? Buffer.from(existing.salt, "hex") : dummySalt;
     deriving++;
@@ -157,8 +166,16 @@ export function createSyncServer(databasePath) {
     let accountId;
     if (register) {
       accountId = randomBytes(16).toString("hex");
-      if (!createAccount.run(accountId, email, salt.toString("hex"), derived.toString("hex")).changes) {
-        throw new HttpError(409, "This account already exists");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!onboarding.consume(email, body)) throw new HttpError(403, "Invitation or email verification is invalid");
+        if (!createAccount.run(accountId, email, salt.toString("hex"), derived.toString("hex")).changes) {
+          throw new HttpError(409, "This account already exists");
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
       }
     } else {
       if (!existing || !timingSafeEqual(derived, Buffer.from(existing.password_hash, "hex"))) {
@@ -181,6 +198,16 @@ export function createSyncServer(databasePath) {
         send(response, 200, { service: "fineshell-sync", status: "ok" });
         return;
       }
+      if (url === "/v1/registration" && method === "GET") {
+        send(response, 200, { mode: onboarding.registration });
+        return;
+      }
+      if (url === "/v1/registration/verify" && method === "POST") {
+        const status = await onboarding.sendCode(await readJson(request, 4096));
+        if (status !== 200) throw new HttpError(status, "Could not send verification");
+        send(response, 200, {});
+        return;
+      }
       if (method === "POST" && (url === "/v1/register" || url === "/v1/login")) {
         send(response, 200, await authenticate(request, url === "/v1/register"));
         return;
@@ -188,7 +215,7 @@ export function createSyncServer(databasePath) {
       const isRecovery = url === "/v1/vault/recover" && method === "POST";
       const deviceRoute = /^\/v1\/devices\/([a-f0-9]{32})$/.exec(url ?? "");
       if (url !== "/v1/vault" && url !== "/v1/logout" && url !== "/v1/devices" &&
-          url !== "/v1/devices/synced" && !deviceRoute && !isRecovery) {
+          url !== "/v1/devices/synced" && url !== "/v1/devices/name" && !deviceRoute && !isRecovery) {
         throw new HttpError(404, "Not found");
       }
       const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
@@ -204,6 +231,11 @@ export function createSyncServer(databasePath) {
           current: item.device_id === session.device_id,
           lastSyncAt: item.last_sync_at, expiresAt: item.expires_at,
         })));
+      } else if (url === "/v1/devices/name" && method === "POST") {
+        const name = deviceLabel((await readJson(request, 4096)).name);
+        if (!name) throw new HttpError(400, "Enter a device name");
+        if (!renameDevice.run(name, tokenHash, Date.now()).changes) throw new HttpError(401, "Sign in again");
+        send(response, 200, {});
       } else if (url === "/v1/devices/synced" && method === "POST") {
         const now = Date.now();
         recordDeviceSync.run(now, tokenHash, now - 60_000);
@@ -263,7 +295,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const databasePath = process.env.FINESHELL_SYNC_DATABASE;
   if (!databasePath) throw new Error("Set FINESHELL_SYNC_DATABASE to a persistent SQLite file");
   const port = Number(process.env.FINESHELL_SYNC_PORT ?? 8787);
-  createSyncServer(databasePath).listen(port, "127.0.0.1", () => {
-    console.log(`FineShell sync listening on 127.0.0.1:${port}`);
+  const host = process.env.FINESHELL_SYNC_HOST || "127.0.0.1";
+  const registration = process.env.FINESHELL_SYNC_REGISTRATION || "open";
+  const sendVerification = registration === "invite"
+    ? createVerificationMailer(process.env)
+    : undefined;
+  const server = createSyncServer(databasePath, { registration, sendVerification });
+  server.listen(port, host, () => {
+    console.log(`FineShell sync listening on ${host}:${port}`);
   });
+  process.once("SIGTERM", () => server.close());
+  process.once("SIGINT", () => server.close());
 }

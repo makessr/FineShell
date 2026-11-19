@@ -1878,6 +1878,7 @@ dependencies = [
  "chacha20poly1305",
  "fast-socks5",
  "futures-util",
+ "glob",
  "httparse",
  "keyring",
  "log",
