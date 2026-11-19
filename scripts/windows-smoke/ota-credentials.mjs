@@ -91,11 +91,13 @@ async function startSignedMirror(configPath) {
   const server = createServer({ cert: await readFile(certificate), key: await readFile(key) }, (req, res) => {
     if (req.method === "GET" && req.url === manifestPath) {
       counts.manifest++;
+      console.log("The loopback update mirror served the candidate manifest.");
       res.writeHead(200, { "Content-Type": "application/json" }).end(manifest);
     } else if (req.method === "GET" && req.url === "/" + downloadUrl) {
       const stream = createReadStream(installer);
       stream.on("error", (error) => res.destroy(error));
       counts.installer++;
+      console.log("The loopback update mirror is streaming the signed installer.");
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": size });
       stream.pipe(res);
     } else {

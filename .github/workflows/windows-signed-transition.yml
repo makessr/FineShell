@@ -58,7 +58,9 @@ jobs:
           "SIGNED_INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
           Write-Host "Signed candidate SHA-256: $((Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash)"
       - name: Upgrade using the built-in updater and reconnect with saved credentials
+        timeout-minutes: 7
         run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Use only a disposable GitHub-hosted runner.' }
           $tls = Join-Path $env:RUNNER_TEMP 'ota-tls'
           New-Item -ItemType Directory -Path $tls | Out-Null
           $openssl = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
@@ -83,8 +85,10 @@ jobs:
           if ($LASTEXITCODE) { throw 'Could not create the loopback certificate request.' }
           & $openssl x509 -req -in $leafCsr -CA $rootPem -CAkey $rootKey -CAcreateserial -days 1 -sha256 -extfile $extensions -out $leafPem
           if ($LASTEXITCODE) { throw 'Could not sign the loopback certificate.' }
-          $root = Import-Certificate -FilePath $rootCer -CertStoreLocation Cert:/CurrentUser/Root
+          Write-Host 'Importing the temporary loopback CA in the hosted runner.'
+          $root = Import-Certificate -FilePath $rootCer -CertStoreLocation Cert:/LocalMachine/Root
           try {
+            Write-Host 'Temporary loopback CA imported. Starting the desktop test.'
             $env:FINESHELL_OTA_MIRROR_FIXTURE = Join-Path $tls 'fixture.json'
             @{
               certificate = $leafPem; key = $leafKey
@@ -94,5 +98,5 @@ jobs:
             $sshFixture = Join-Path $env:RUNNER_TEMP 'fixture/node_modules/ssh2/lib/index.js'
             ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $baseline -Baseline 0.5.1 -Target 0.6.0 -Ssh2Module $sshFixture -UseHostedRunnerWebView2Policy
           } finally {
-            Remove-Item -LiteralPath "Cert:/CurrentUser/Root/$($root.Thumbprint)"
+            Remove-Item -LiteralPath "Cert:/LocalMachine/Root/$($root.Thumbprint)"
           }
