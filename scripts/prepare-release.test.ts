@@ -5,6 +5,7 @@ import {
   updateCargoLockVersion,
   updateCargoPackageVersion,
   updateJsonVersion,
+  updateReadmeVersion,
 } from "./prepare-release";
 
 describe("release preparation", () => {
@@ -12,6 +13,12 @@ describe("release preparation", () => {
     expect(nextReleaseVersion("1.2.3", "patch")).toBe("1.2.4");
     expect(nextReleaseVersion("1.2.3", "minor")).toBe("1.3.0");
     expect(nextReleaseVersion("1.2.3", "major")).toBe("2.0.0");
+  });
+
+  test("updates the repository version in the README", () => {
+    const readme = "## 下载与安装\r\n\r\n**仓库版本** v0.4.1。各版本变动见更新日志。\r\n";
+    expect(updateReadmeVersion(readme, "0.4.1", "0.5.0")).toBe(readme.replace("v0.4.1", "v0.5.0"));
+    expect(() => updateReadmeVersion(readme, "0.3.0", "0.5.0")).toThrow("README.md");
   });
 
   test("synchronizes JSON, Cargo and lockfile versions", () => {

@@ -125,10 +125,12 @@ export function createSyncServer(databasePath, options = {}) {
   }
   const onboarding = createOnboarding(db, options);
   const readAccount = db.prepare("SELECT id, salt, password_hash FROM accounts WHERE email = ?");
-  const createAccount = db.prepare("INSERT OR IGNORE INTO accounts (id, email, salt, password_hash) VALUES (?, ?, ?, ?)");
+  const createAccount = db.prepare(
+    "INSERT OR IGNORE INTO accounts (id, email, salt, password_hash, revision, vault) VALUES (?, ?, ?, ?, ?, ?)",
+  );
   const readVault = db.prepare("SELECT revision, vault FROM accounts WHERE id = ?");
   const writeVault = db.prepare("UPDATE accounts SET revision = ?, vault = ? WHERE id = ? AND revision = ?");
-  const readSession = db.prepare("SELECT account_id, device_id FROM sessions WHERE token_hash = ? AND expires_at > ?");
+  const readSession = db.prepare("SELECT account_id, device_id, device_name FROM sessions WHERE token_hash = ? AND expires_at > ?");
   const createSession = db.prepare(
     "INSERT INTO sessions (token_hash,account_id,expires_at,device_id,device_name) VALUES (?,?,?,?,?)",
   );
@@ -141,6 +143,7 @@ export function createSyncServer(databasePath, options = {}) {
   );
   const renameDevice = db.prepare("UPDATE sessions SET device_name = ? WHERE token_hash = ? AND expires_at > ?");
   const deleteSession = db.prepare("DELETE FROM sessions WHERE token_hash = ?");
+  const revokeAccountSessions = db.prepare("DELETE FROM sessions WHERE account_id = ?");
   const pruneSessions = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
   const dummySalt = randomBytes(16);
   const attempts = new Map();
@@ -178,11 +181,25 @@ export function createSyncServer(databasePath, options = {}) {
       throw new HttpError(429, "Too many attempts. Try again later");
     }
     attempts.set(email, [...recent, now]);
-    if (register && !onboarding.authorized(email, body, now)) {
-      throw new HttpError(403, "Invitation or email verification is invalid");
+    if (register && onboarding.registration === "closed") {
+      throw new HttpError(403, "Registration is closed");
     }
     const existing = readAccount.get(email);
-    const salt = register ? randomBytes(16) : existing ? Buffer.from(existing.salt, "hex") : dummySalt;
+    let initialVault = null;
+    let proposedId = null;
+    if (register && (Object.hasOwn(body, "accountId") || Object.hasOwn(body, "vault"))) {
+      if (typeof body.accountId !== "string" || !/^[a-f0-9]{32}$/.test(body.accountId)) {
+        throw new HttpError(400, "Invalid account identifier");
+      }
+      proposedId = body.accountId;
+      initialVault = JSON.stringify(validateVault(body.vault));
+    }
+    const retry = proposedId !== null && existing?.id === proposedId;
+    const creating = register && !retry;
+    if (creating && !onboarding.authorized(email, body, now)) {
+      throw new HttpError(403, "Invitation or email verification is invalid");
+    }
+    const salt = creating ? randomBytes(16) : existing ? Buffer.from(existing.salt, "hex") : dummySalt;
     deriving++;
     let derived;
     try {
@@ -191,12 +208,13 @@ export function createSyncServer(databasePath, options = {}) {
       deriving--;
     }
     let accountId;
-    if (register) {
-      accountId = randomBytes(16).toString("hex");
+    if (creating) {
+      accountId = proposedId ?? randomBytes(16).toString("hex");
       db.exec("BEGIN IMMEDIATE");
       try {
         if (!onboarding.consume(email, body)) throw new HttpError(403, "Invitation or email verification is invalid");
-        if (!createAccount.run(accountId, email, salt.toString("hex"), derived.toString("hex")).changes) {
+        if (!createAccount.run(accountId, email, salt.toString("hex"), derived.toString("hex"),
+          initialVault ? 1 : 0, initialVault).changes) {
           throw new HttpError(409, "This account already exists");
         }
         db.exec("COMMIT");
@@ -246,10 +264,11 @@ export function createSyncServer(databasePath, options = {}) {
         return;
       }
       const isRecovery = url === "/v1/vault/recover" && method === "POST";
+      const isRotation = url === "/v1/vault/rotate-key" && method === "POST";
       const isVaultStatus = url === "/v1/vault/status" && method === "GET";
       const deviceRoute = /^\/v1\/devices\/([a-f0-9]{32})$/.exec(url ?? "");
       if (url !== "/v1/vault" && url !== "/v1/logout" && url !== "/v1/devices" &&
-          url !== "/v1/devices/synced" && url !== "/v1/devices/name" && !deviceRoute && !isRecovery && !isVaultStatus) {
+          url !== "/v1/devices/synced" && url !== "/v1/devices/name" && !deviceRoute && !isRecovery && !isRotation && !isVaultStatus) {
         throw new HttpError(404, "Not found");
       }
       const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
@@ -286,6 +305,29 @@ export function createSyncServer(databasePath, options = {}) {
       } else if (url === "/v1/vault" && method === "GET") {
         const { revision, vault } = readVault.get(session.account_id);
         send(response, 200, { revision, vault: vault && JSON.parse(vault) });
+      } else if (isRotation) {
+        const { revision, vault } = await readJson(request, maxVaultBytes);
+        if (!Number.isSafeInteger(revision) || revision < 1 || !Number.isSafeInteger(revision + 1)) {
+          throw new HttpError(400, "Invalid vault revision");
+        }
+        const encrypted = validateVault(vault);
+        const token = randomBytes(32).toString("base64url");
+        const now = Date.now();
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          if (!readSession.get(tokenHash, now)) throw new HttpError(401, "Sign in again");
+          if (!writeVault.run(revision + 1, JSON.stringify(encrypted), session.account_id, revision).changes) {
+            throw new HttpError(409, "Vault changed. Read the current revision and try again");
+          }
+          revokeAccountSessions.run(session.account_id);
+          createSession.run(hashToken(token), session.account_id, now + sessionLifetime,
+            session.device_id, session.device_name);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+        send(response, 200, { revision: revision + 1, token });
       } else if ((url === "/v1/vault" && method === "PUT") || isRecovery) {
         const { revision, vault, nextRevision } = await readJson(request, maxVaultBytes);
         if (!Number.isSafeInteger(revision) || revision < 0) {

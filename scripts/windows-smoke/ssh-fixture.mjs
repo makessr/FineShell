@@ -1,0 +1,87 @@
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { join } from "node:path";
+
+export async function startSshFixture(ssh2, directory) {
+  const password = randomBytes(24).toString("base64url");
+  const keyPassphrase = randomBytes(24).toString("base64url");
+  function privateKey(passphrase) {
+    return generateKeyPairSync("rsa", {
+      modulusLength: 3072,
+      privateKeyEncoding: { type: "pkcs1", format: "pem", ...(passphrase && { cipher: "aes-256-cbc", passphrase }) },
+    }).privateKey;
+  }
+  const hostKey = privateKey();
+  const deviceKey = privateKey(keyPassphrase);
+  const deviceKeyFile = join(directory, "fixture-private-key");
+  await writeFile(deviceKeyFile, deviceKey, { mode: 0o600 });
+  const authorized = ssh2.utils.parseKey(deviceKey, keyPassphrase);
+  const fingerprint = "SHA256:" + createHash("sha256").update(ssh2.utils.parseKey(hostKey).getPublicSSH())
+    .digest("base64").replace(/=+$/, "");
+  const counts = { password: 0, publickey: 0 };
+  const sockets = new Set();
+  const algorithms = {
+    kex: ["diffie-hellman-group16-sha512"],
+    serverHostKey: ["rsa-sha2-512", "rsa-sha2-256"],
+    cipher: ["aes128-ctr"],
+    hmac: ["hmac-sha2-256"],
+  };
+  const server = new ssh2.Server({ hostKeys: [hostKey], algorithms }, (client) => {
+    client.on("error", () => client.end());
+    client.on("authentication", (auth) => {
+      if (auth.method === "password" && auth.username === "fineshell-password" && auth.password === password) {
+        counts.password++;
+        auth.accept();
+      } else if (auth.method === "publickey" && auth.username === "fineshell-key" &&
+          auth.key.data.equals(authorized.getPublicSSH())) {
+        if (!auth.signature || authorized.verify(auth.blob, auth.signature, auth.hashAlgo) === true) {
+          if (auth.signature) counts.publickey++;
+          auth.accept();
+        } else auth.reject(["publickey"]);
+      } else auth.reject([auth.username === "fineshell-key" ? "publickey" : "password"]);
+    });
+    client.on("ready", () => client.on("session", (accept) => {
+      const session = accept();
+      session.on("pty", (acceptPty) => acceptPty?.());
+      session.on("window-change", (acceptResize) => acceptResize?.());
+      session.on("env", (acceptEnv) => acceptEnv?.());
+      session.on("shell", (acceptShell) => acceptShell().write("FINESHELL_SMOKE_READY\r\n"));
+      session.on("exec", (acceptExec) => {
+        const stream = acceptExec();
+        stream.exit(0);
+        stream.end();
+      });
+      session.on("sftp", (acceptSftp) => {
+        const sftp = acceptSftp();
+        const attributes = { mode: 0o040755, size: 0, uid: 1000, gid: 1000, atime: 0, mtime: 0 };
+        const entries = [{ filename: "fineshell-smoke.txt", longname: "fineshell-smoke.txt",
+          attrs: { ...attributes, mode: 0o100644 } }];
+        const handle = Buffer.from([0]);
+        let sent = false;
+        sftp.on("REALPATH", (id) => sftp.name(id, [{ filename: "/", longname: "/", attrs: attributes }]));
+        sftp.on("STAT", (id) => sftp.attrs(id, attributes));
+        sftp.on("LSTAT", (id) => sftp.attrs(id, attributes));
+        sftp.on("OPENDIR", (id) => { sent = false; sftp.handle(id, handle); });
+        sftp.on("READDIR", (id) => {
+          if (sent) sftp.status(id, 1);
+          else { sftp.name(id, entries); sent = true; }
+        });
+        sftp.on("CLOSE", (id) => sftp.status(id, 0));
+      });
+    }));
+  });
+  const listener = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    server.injectSocket(socket);
+  });
+  listener.listen(0, "127.0.0.1");
+  await once(listener, "listening");
+  return { password, keyPassphrase, deviceKeyFile, fingerprint, counts, port: listener.address().port,
+    close: () => new Promise((resolve) => {
+      for (const socket of sockets) socket.destroy();
+      listener.close(resolve);
+    }) };
+}

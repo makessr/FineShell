@@ -7,6 +7,7 @@ import {
   hostSyncAccount,
   hostSyncDevices,
   hostSyncRegistration,
+  rotateHostSyncKey,
   sendHostSyncVerification,
   relinkHostSyncKey,
   type BlockedSyncRecord,
@@ -34,7 +35,8 @@ export default function HostSyncSettings() {
   const [email, setEmail] = useState("");
   const [deviceName, setDeviceName] = useState("");
   const [renameDevice, setRenameDevice] = useState<string | null>(null);
-  const [inviteRequired, setInviteRequired] = useState<boolean | null>(null);
+  const [registrationMode, setRegistrationMode] = useState<"open" | "invite" | "closed" | null>(null);
+  const inviteRequired = registrationMode === "invite";
   const [inviteCode, setInviteCode] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [sendingCode, setSendingCode] = useState(false);
@@ -44,6 +46,7 @@ export default function HostSyncSettings() {
   const [password, setPassword] = useState("");
   const [recoveryKey, setRecoveryKey] = useState("");
   const [confirmedKey, setConfirmedKey] = useState("");
+  const [replacementKey, setReplacementKey] = useState("");
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -93,7 +96,7 @@ export default function HostSyncSettings() {
     let current = true;
     const timer = window.setTimeout(() => {
       void hostSyncRegistration(server).then(({ mode }) => {
-        if (current) setInviteRequired(mode === "invite");
+        if (current) setRegistrationMode(mode);
       }).catch((error) => {
         if (current) Message.error(commandErrorMessage(error));
       });
@@ -160,7 +163,7 @@ export default function HostSyncSettings() {
       const key = next ? await hostSyncRecoveryKey() : "";
       setRecoveryKey(key);
       setConfirmedKey("");
-      setInviteRequired(null);
+      setRegistrationMode(null);
       setInviteCode("");
       setVerificationCode("");
       setRegister(next);
@@ -188,6 +191,22 @@ export default function HostSyncSettings() {
       Message.error(commandErrorMessage(error));
     } finally {
       setPassword("");
+      setBusy(false);
+    }
+  }
+
+  async function rotateKey() {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      await rotateHostSyncKey(accountId, replacementKey);
+      setReplacementKey("");
+      setConfirmedKey("");
+      setDevices([]);
+      Message.success("已更换恢复密钥。其他设备必须使用新密钥重新登录。");
+    } catch (error) {
+      Message.error(commandErrorMessage(error));
+    } finally {
       setBusy(false);
     }
   }
@@ -226,8 +245,28 @@ export default function HostSyncSettings() {
         )}
         <Space wrap>
           <Button type="primary" onClick={() => sync()}>立即同步</Button>
-          <Button loading={busy} onClick={() => void signOut()}>退出登录</Button>
+          <Button disabled={busy || !!replacementKey} onClick={() => void signOut()}>退出登录</Button>
+          {!replacementKey && <Button disabled={busy} onClick={() => {
+            void hostSyncRecoveryKey().then(setReplacementKey)
+              .catch((error) => Message.error(commandErrorMessage(error)));
+          }}>更换恢复密钥</Button>}
         </Space>
+        {replacementKey && <Space direction="vertical">
+          <Alert type="warning" content="先保存新密钥。更换后其他设备需要重新登录，已经导出的旧快照仍可能由旧密钥解开。" />
+          <label>新恢复密钥<Input value={replacementKey} readOnly /></label>
+          <label>粘贴新密钥以确认已保存
+            <Input.Password value={confirmedKey} onChange={setConfirmedKey} autoComplete="off" />
+          </label>
+          <Space>
+            <Button type="primary" loading={busy}
+              disabled={confirmedKey.trim() !== replacementKey}
+              onClick={() => void rotateKey()}>更换并撤销其他设备</Button>
+            <Button disabled={busy} onClick={() => {
+              setReplacementKey("");
+              setConfirmedKey("");
+            }}>取消</Button>
+          </Space>
+        </Space>}
         {status?.recoverable && (
           <Popconfirm content="以这台设备最后验证的快照恢复云端？" onOk={() => sync({ recover: true })}>
             <Button status="warning">恢复云端快照</Button>
@@ -307,7 +346,7 @@ export default function HostSyncSettings() {
         {status?.signInRequired && <Alert type="warning" content={status.message} />}
         <label>
           同步服务地址
-          <Input value={server} onChange={(value) => { setInviteRequired(null); setServer(value); }}
+          <Input value={server} onChange={(value) => { setRegistrationMode(null); setServer(value); }}
             placeholder="https://sync.example.com" />
         </label>
         <label>
@@ -324,6 +363,9 @@ export default function HostSyncSettings() {
           <Input.Password value={password} onChange={setPassword} minLength={12}
             autoComplete={register ? "new-password" : "current-password"} />
         </label>
+        {register && registrationMode === "closed" && (
+          <Alert type="warning" content="此服务器已关闭新账号注册。已有账号可以继续登录。" />
+        )}
         {register && inviteRequired && (
           <>
             <label>
@@ -362,7 +404,8 @@ export default function HostSyncSettings() {
         <Space>
           <Button type="primary" htmlType="submit" loading={busy}
             disabled={!server || !email || password.length < 12 || !recoveryKey ||
-              (register && (inviteRequired === null || recoveryKey !== confirmedKey.trim() ||
+              (register && (registrationMode === null || registrationMode === "closed" ||
+                recoveryKey !== confirmedKey.trim() ||
                 (inviteRequired && (!inviteCode.trim() || !verificationCode.trim()))))}>
             {register ? "创建账号并同步" : "登录并同步"}
           </Button>

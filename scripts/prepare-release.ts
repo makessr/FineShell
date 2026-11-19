@@ -117,6 +117,15 @@ export function prepareReleaseChangelog(
     .replace(/^\s+/, "")}`;
 }
 
+export function updateReadmeVersion(contents: string, current: string, version: string) {
+  const pattern = /^(\*\*仓库版本\*\* v)(\d+\.\d+\.\d+)(?=。)/gm;
+  const versions = [...contents.matchAll(pattern)];
+  if (versions.length !== 1 || versions[0][2] !== current) {
+    throw new Error("README.md 的仓库版本缺失或与当前版本不一致");
+  }
+  return contents.replace(pattern, (_match, prefix: string) => prefix + version);
+}
+
 function requireCleanWorktree(projectRoot: string) {
   const status = execFileSync("git", ["status", "--porcelain"], {
     cwd: projectRoot,
@@ -142,6 +151,7 @@ function prepareRelease(bump: ReleaseBump) {
   const cargoPath = resolve(projectRoot, "src-tauri/Cargo.toml");
   const cargoLockPath = resolve(projectRoot, "src-tauri/Cargo.lock");
   const changelogPath = resolve(projectRoot, "CHANGELOG.md");
+  const readmePath = resolve(projectRoot, "README.md");
   const packageContents = readFileSync(packagePath, "utf8");
   const tauriContents = readFileSync(tauriPath, "utf8");
   const cargoContents = readFileSync(cargoPath, "utf8");
@@ -169,6 +179,7 @@ function prepareRelease(bump: ReleaseBump) {
     currentVersion,
     version,
   );
+  const nextReadmeContents = updateReadmeVersion(readFileSync(readmePath, "utf8"), currentVersion, version);
   const nextChangelogContents = prepareReleaseChangelog(
     changelogContents,
     version,
@@ -180,6 +191,7 @@ function prepareRelease(bump: ReleaseBump) {
   writeFileSync(cargoPath, nextCargoContents);
   writeFileSync(cargoLockPath, nextCargoLockContents);
   writeFileSync(changelogPath, nextChangelogContents);
+  writeFileSync(readmePath, nextReadmeContents);
 
   console.log(`FineShell v${version} 发布文件已准备完成`);
 }
