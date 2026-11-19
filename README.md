@@ -112,16 +112,20 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
-**仓库版本** v0.4.1。各版本变动见 [更新日志](CHANGELOG.md)。
+**仓库版本** v0.5.0。各版本变动见 [更新日志](CHANGELOG.md)。
 
-可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载已发布的 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
+在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 查看对应版本的安装包。应用通过本仓库发布的更新清单检查更新。
 
-- Windows x64 提供 `.exe`（NSIS）和 `.msi`。
-- Windows ARM64 提供 `.exe`（NSIS）。
+| v0.5.0 发布目标 | 安装包 |
+| --- | --- |
+| Windows x64 | `.exe`（NSIS）、`.msi` |
+| Windows ARM64 | `.exe`（NSIS） |
+| macOS Apple Silicon、Intel | 对应架构的 `.dmg` |
+| Linux x64、ARM64 | 对应架构的 `.deb`，适用于 Debian、Ubuntu 等使用 APT 的发行版 |
 
 从 v0.2.0 升级到 v0.3.0 时，请退出 FineShell，下载与当前架构和安装方式一致的安装包，再覆盖安装。v0.2.0 和 v0.3.0 的应用内更新会拒绝本仓库的下载地址。
 
-macOS 和 Linux 可以从源码构建，也可在 [上游 Releases](https://github.com/Max0897/FineShell/releases) 获取上游版本的安装包。
+v0.5.0 公开前，macOS 和 Linux 可从本仓库源码构建。macOS 下载包的签名和公证状态以发布说明为准。
 
 ### Linux 安装
 
@@ -129,7 +133,7 @@ macOS 和 Linux 可以从源码构建，也可在 [上游 Releases](https://gith
 
 ```bash
 sudo apt update
-sudo apt install ./FineShell_0.1.12_linux_arm64.deb
+sudo apt install ./FineShell_0.5.0_linux_arm64.deb
 ```
 
 请根据实际下载的文件名调整命令。不要直接使用 `dpkg -i`，因为 `dpkg` 不会自动下载缺失的依赖。
