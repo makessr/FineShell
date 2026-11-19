@@ -23,7 +23,7 @@ export async function startSshFixture(ssh2, directory) {
   const counts = { password: 0, publickey: 0 };
   const sockets = new Set();
   const algorithms = {
-    kex: ["diffie-hellman-group14-sha256"],
+    kex: ["diffie-hellman-group16-sha512"],
     serverHostKey: ["rsa-sha2-512", "rsa-sha2-256"],
     cipher: ["aes128-ctr"],
     hmac: ["hmac-sha2-256"],

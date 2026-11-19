@@ -173,7 +173,8 @@ try {
   const resumed = await invoke(b, "host_sync_exchange", {
     accountId: peer.accountId, base, configuration: { hosts: syncedHosts, keys, proxies: [] },
   });
-  assert.equal(resumed.conflicts.length, 0);
+  assert.equal(resumed.conflicts?.length ?? 0, 0);
+  assert.ok(resumed.inspection?.revision, "Recovered device received a verified sync revision");
   assert.notEqual(resumed.base.wrappedKey.salt, base.wrappedKey.salt);
   console.log("旧恢复密钥失效，旧会话已撤销，设备 B 使用新密钥重新登录并继续同步。");
 } finally {
