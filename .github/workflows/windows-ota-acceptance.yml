@@ -1,0 +1,33 @@
+name: Windows x64 OTA acceptance
+on:
+  push:
+    branches: [test/ota-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - name: Download and verify the pinned v0.5.0 installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = 'FineShell_0.5.0_windows_x64-setup.exe'
+          gh release download v0.5.0 --repo makessr/FineShell --pattern $name --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE) { throw 'Could not download the baseline installer.' }
+          $installer = Join-Path $env:RUNNER_TEMP $name
+          $expected = '671D0774B941066440C97BAC0A1B69974852B0591E994FF440A22B293E0B014C'
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expected) {
+            throw 'The baseline installer digest differs from the verified release asset.'
+          }
+      - name: Upgrade with the built-in updater
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'FineShell_0.5.0_windows_x64-setup.exe'
+          ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $installer -Baseline 0.5.0 -Target 0.5.1

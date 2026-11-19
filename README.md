@@ -249,6 +249,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ## Windows 发布验收
 
+临时 Windows x64 验收工作流使用独立 GitHub 运行器从 v0.5.0 实测升级到 v0.5.1。
+
 从 v0.5.1 起，Windows 版支持只启用现代椭圆曲线密钥交换的 SSH 服务器。桌面验收使用 Curve25519 握手覆盖该场景。
 
 待发布的 SFTP 大目录预览会分批显示最先读取的项目，最多预览 1,024 项。读取完成后显示完整目录，可全选、拖拽和执行文件操作。
