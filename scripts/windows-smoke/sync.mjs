@@ -161,6 +161,32 @@ try {
     console.log("设备 B 使用同步过来的 " + method + " 登录，并读取了 SFTP 测试目录。");
   }
 
+  await evaluate(b, () => document.querySelector('button[aria-label="筛选文件名"]').click());
+  for (const [query, expected] of [
+    ["AFTER-PREVIEW", "after-preview.txt"],
+    ["no-such-sftp-file", "没有匹配的文件或目录"],
+  ]) {
+    await evaluate(b, (query) => {
+      const input = document.querySelector('input[aria-label="当前目录文件名"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, query);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, query);
+    await until("Filter the live SFTP directory: " + query, () => evaluate(b, (expected) => {
+      const list = document.querySelector(".sftp-table")?.innerText ?? "";
+      return list.includes(expected) && !list.includes("fineshell-smoke.txt") && !list.includes("zz-0.txt");
+    }, expected));
+  }
+  await evaluate(b, () => {
+    const input = document.querySelector('input[aria-label="当前目录文件名"]');
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await until("Clear the SFTP filter and restore the full list", () => evaluate(b, () => {
+    const list = document.querySelector(".sftp-table")?.innerText ?? "";
+    return !document.querySelector('input[aria-label="当前目录文件名"]') &&
+      list.includes("fineshell-smoke.txt") && list.includes("after-preview.txt");
+  }));
+  console.log("真实 SFTP 目录通过文件名匹配、空结果和 Escape 清除回归。");
+
   const peer = await invoke(b, "host_sync_account");
   await click(setupA, "更换恢复密钥");
   const replacement = await readKey(setupA, "新恢复密钥");
