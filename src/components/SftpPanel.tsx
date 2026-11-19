@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Empty,
   Message,
@@ -7,7 +14,7 @@ import {
   Tooltip,
   Typography,
 } from "@arco-design/web-react";
-import type { TableColumnProps } from "@arco-design/web-react";
+import type { TableColumnProps, TableInstance } from "@arco-design/web-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { diagnosticInvoke as invoke } from "../diagnostics";
 import {
@@ -123,6 +130,11 @@ const INITIAL_BROWSER: BrowserState = {
   inputPath: "/",
   entries: [],
 };
+const SFTP_VIRTUAL_ROW_THRESHOLD = 300;
+const sftpNameCollator = new Intl.Collator("zh-CN", {
+  numeric: true,
+  sensitivity: "base",
+});
 
 function ExternalEditStatusIcon({ edit }: { edit: ExternalEditPayload }) {
   const status = externalEditStatusMeta(edit.status);
@@ -174,6 +186,8 @@ function SftpPanel({
   );
   const browsersRef = useRef(browsers);
   const panelRef = useRef<HTMLElement>(null);
+  const tableRef = useRef<TableInstance>(null);
+  const [virtualBodyHeight, setVirtualBodyHeight] = useState(1);
   const pendingLocatePathRef = useRef<string | null>(null);
   const sessionHostIdsRef = useRef(new Map<string, string>());
   const { commitLocation, locationForHost, recordVisitedPath } =
@@ -509,6 +523,25 @@ function SftpPanel({
       ),
     [browser?.entries, showHiddenFiles],
   );
+  const virtualized = ready && visibleEntries.length >= SFTP_VIRTUAL_ROW_THRESHOLD;
+
+  useLayoutEffect(() => {
+    if (!virtualized) return;
+    const table = tableRef.current?.getRootDomElement();
+    const container = table?.parentElement;
+    const header = table?.querySelector(".arco-table-header");
+    if (!container || !header) return;
+
+    const measure = () => {
+      const headerHeight = Math.ceil(header.getBoundingClientRect().height);
+      setVirtualBodyHeight(Math.max(1, container.clientHeight - headerHeight));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [virtualized]);
 
   useEffect(() => {
     if (!session) return;
@@ -568,12 +601,17 @@ function SftpPanel({
       return;
     }
     setSelectedEntryKeys([entry.id]);
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      if (virtualized) {
+        tableRef.current?.scrollIntoView(entry.id);
+        return;
+      }
       panelRef.current
         ?.querySelector(`[data-sftp-entry-path="${CSS.escape(target)}"]`)
         ?.scrollIntoView({ block: "nearest" });
     });
-  }, [browser?.path, browser?.status, visibleEntries]);
+    return () => cancelAnimationFrame(frame);
+  }, [browser?.path, browser?.status, virtualized, visibleEntries]);
 
   useEffect(() => {
     const handleSelectAllRequest = (event: Event) => {
@@ -684,11 +722,7 @@ function SftpPanel({
       {
         title: "名称",
         dataIndex: "name",
-        sorter: (left, right) =>
-          left.name.localeCompare(right.name, "zh-CN", {
-            numeric: true,
-            sensitivity: "base",
-          }),
+        sorter: (left, right) => sftpNameCollator.compare(left.name, right.name),
         render: (_, entry) => {
           const externalEdit = Object.values(externalEdits).find(
             (edit) =>
@@ -699,6 +733,7 @@ function SftpPanel({
           return (
             <div
               className={`sftp-name-cell${ready && !operationLoading ? " is-draggable" : ""}`}
+              onLostPointerCapture={cancelRemotePointerDrag}
               onPointerCancel={cancelRemotePointerDrag}
               onPointerDown={(event) => startRemotePointerDrag(event, entry)}
               onPointerMove={moveRemotePointerDrag}
@@ -1064,7 +1099,7 @@ function SftpPanel({
           resolveItems={resolveEntryContextMenu}
         >
           <div
-            className={`sftp-table-container${fileDropActive ? " sftp-table-container-drop-active" : ""}`}
+            className={`sftp-table-container${virtualized ? " sftp-table-container-virtualized" : ""}${fileDropActive ? " sftp-table-container-drop-active" : ""}`}
             ref={dropZoneRef}
           >
             {fileDropActive && (
@@ -1100,6 +1135,7 @@ function SftpPanel({
                 },
               })}
               pagination={false}
+              ref={tableRef}
               rowKey="id"
               rowClassName={(entry) =>
                 [
@@ -1123,6 +1159,8 @@ function SftpPanel({
                 type: "checkbox",
               }}
               size="small"
+              scroll={virtualized ? { y: virtualBodyHeight } : undefined}
+              virtualized={virtualized}
             />
             {remoteDragPreview && (
               <div
