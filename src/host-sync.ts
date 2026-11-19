@@ -63,8 +63,15 @@ export interface SyncOptions {
   manual?: boolean;
 }
 
+interface SyncInspection {
+  revision: number;
+  fingerprint: string;
+  credentialGeneration: number;
+}
+
 interface SyncResult {
   base: object;
+  inspection?: SyncInspection;
   expectedLocal?: object | null;
   conflicts?: HostSyncConflict[];
   conflictSnapshot?: string | null;
@@ -197,11 +204,32 @@ function writeStatus(status: HostSyncStatus) {
   localStorage.setItem(statusKey, JSON.stringify(status));
 }
 
-async function synchronize(account: HostSyncAccount, options: SyncOptions): Promise<HostSyncStatus> {
+interface SyncCache {
+  account: HostSyncAccount;
+  configuration: string;
+  base: string | undefined;
+  inspection: SyncInspection;
+  checkedAt: number;
+  blocked?: BlockedSyncRecord[];
+}
+
+async function synchronize(
+  account: HostSyncAccount, options: SyncOptions, cache?: SyncCache,
+): Promise<{ status: HostSyncStatus; cache?: SyncCache }> {
   const current = await loadConfiguration();
   const configuration = project(current);
   const expected = JSON.stringify(configuration);
-  const { base, expectedLocal, conflicts, conflictSnapshot, blocked } = await invoke<SyncResult>("host_sync_exchange", {
+  if (!options.manual && cache && cache.account.accountId === account.accountId &&
+      cache.account.server === account.server && cache.configuration === expected &&
+      cache.base === current.hostSyncBase && Date.now() - cache.checkedAt < 120_000) {
+    const unchanged = await invoke<boolean | null>("host_sync_probe", {
+      accountId: account.accountId, known: cache.inspection,
+    });
+    if (unchanged) {
+      return { status: { state: "success", time: new Date().toISOString(), blocked: cache.blocked }, cache };
+    }
+  }
+  const { base, inspection, expectedLocal, conflicts, conflictSnapshot, blocked } = await invoke<SyncResult>("host_sync_exchange", {
     accountId: account.accountId,
     configuration,
     base: current.hostSyncBase ? JSON.parse(current.hostSyncBase) : null,
@@ -209,11 +237,14 @@ async function synchronize(account: HostSyncAccount, options: SyncOptions): Prom
     recover: options.recover,
   });
   if (conflicts?.length && conflictSnapshot) {
-    return { state: "failed", conflicts, snapshot: conflictSnapshot, blocked };
+    return { status: { state: "failed", conflicts, snapshot: conflictSnapshot, blocked } };
   }
   const status: HostSyncStatus = { state: "success", time: new Date().toISOString(), blocked };
   const encoded = JSON.stringify(base);
-  if (encoded === current.hostSyncBase && !expectedLocal) return status;
+  const nextCache = inspection ? {
+    account, configuration: expected, base: encoded, inspection, checkedAt: Date.now(), blocked,
+  } satisfies SyncCache : undefined;
+  if (encoded === current.hostSyncBase && !expectedLocal) return { status, cache: nextCache };
 
   let received: AppliedConfiguration | undefined;
   if (expectedLocal) {
@@ -277,7 +308,7 @@ async function synchronize(account: HostSyncAccount, options: SyncOptions): Prom
       emitProtocolEventTo("settings", "configuration:changed"),
     ]);
   }
-  return status;
+  return { status, cache: nextCache };
 }
 
 export function startHostSync() {
@@ -288,11 +319,14 @@ export function startHostSync() {
   let deviceAccount: string | undefined;
   let retries = 0;
   let retryAfter = 0;
+  let cache: SyncCache | undefined;
+  let changeTimer: number | undefined;
 
-  async function run(options: SyncOptions = {}) {
+  async function run(options: SyncOptions = {}, fromChange = false) {
     if (!hostSyncIsBound() || (!options.manual && Date.now() < retryAfter)) return;
     if (running) {
       if (options.manual) queued = options;
+      else if (fromChange) queued ??= options;
       return;
     }
     running = true;
@@ -302,7 +336,8 @@ export function startHostSync() {
       const status = readHostSyncStatus();
       if (!options.manual && status?.conflicts?.length) return;
       if (options.manual) writeStatus({ state: "working" });
-      const result = await synchronize(account, options);
+      const { status: result, cache: nextCache } = await synchronize(account, options, cache);
+      cache = nextCache;
       writeStatus(result);
       retries = 0;
       retryAfter = 0;
@@ -313,6 +348,7 @@ export function startHostSync() {
       }
       if (options.recover && result.state === "success") queued ??= { manual: true };
     } catch (error) {
+      cache = undefined;
       const message = commandErrorMessage(error);
       retries = Math.min(retries + 1, 5);
       retryAfter = Date.now() + 15_000 * 2 ** retries;
@@ -334,6 +370,10 @@ export function startHostSync() {
 
   void listenProtocolEvent("host-sync:request", ({ payload }) => {
     void run(payload);
+  }).catch((error) => writeStatus({ state: "failed", message: commandErrorMessage(error) }));
+  void listenProtocolEvent("configuration:changed", () => {
+    window.clearTimeout(changeTimer);
+    changeTimer = window.setTimeout(() => void run({}, true), 350);
   }).catch((error) => writeStatus({ state: "failed", message: commandErrorMessage(error) }));
   window.addEventListener("online", () => { retryAfter = 0; void run(); });
   window.setInterval(() => void run(), 15_000);

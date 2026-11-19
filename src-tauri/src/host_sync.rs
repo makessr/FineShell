@@ -5,13 +5,15 @@ use reqwest::{Client, Method, StatusCode, Url};
 use chacha20poly1305::{aead::{Aead, AeadCore, OsRng, Payload}, KeyInit, XChaCha20Poly1305, XNonce};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 use crate::{
     cloud_backup::{
         crypto::{decrypt_payload, encrypt_payload, generate_recovery_key, random_master_key, unwrap_master_key, wrap_master_key},
         types::WrappedMasterKey,
     },
-    credentials::{delete_backup_credential, read_backup_credential, restore_backup_credential},
+    credentials::{delete_backup_credential, read_backup_credential, restore_backup_credential, sync_credential_generation},
     managed_keys::{install_sync_key, read_sync_key},
     protocol::{CommandError, CommandResult},
 };
@@ -121,12 +123,36 @@ pub(crate) struct AppliedConfiguration {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncResult {
     base: Vault,
+    inspection: Option<SyncInspection>,
     expected_local: Option<Vault>,
     conflict_snapshot: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     conflicts: Vec<Conflict>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     blocked: Vec<BlockedRecord>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SyncInspection {
+    revision: u64,
+    fingerprint: String,
+    credential_generation: u64,
+}
+
+#[derive(Deserialize)]
+struct VaultStatus {
+    revision: u64,
+    fingerprint: Option<String>,
+}
+
+fn inspection(vault: &Vault, revision: u64, credential_generation: u64) -> Result<SyncInspection, String> {
+    let bytes = serde_json::to_vec(vault).map_err(|_| "无法编码同步仓库")?;
+    Ok(SyncInspection {
+        revision,
+        fingerprint: format!("{:x}", Sha256::digest(bytes)),
+        credential_generation,
+    })
 }
 
 #[derive(Clone, Serialize)]
@@ -202,11 +228,11 @@ async fn request<T: DeserializeOwned>(
     token: Option<&str>,
     body: Option<Value>,
 ) -> Result<T, String> {
-    let client = Client::builder()
+    static CLIENT: OnceLock<Result<Client, reqwest::Error>> = OnceLock::new();
+    let client = CLIENT.get_or_init(|| Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|_| "无法初始化同步客户端")?;
+        .build()).as_ref().map_err(|_| "无法初始化同步客户端")?;
     let mut request = client.request(method, format!("{server}/v1/{path}"));
     if let Some(token) = token {
         request = request.bearer_auth(token);
@@ -730,6 +756,27 @@ pub(crate) async fn host_sync_devices(
 }
 
 #[tauri::command]
+pub(crate) async fn host_sync_probe(
+    account_id: String,
+    known: SyncInspection,
+) -> CommandResult<Option<bool>> {
+    let result = async {
+        if known.credential_generation != sync_credential_generation() {
+            return Ok(Some(false));
+        }
+        let device = require_device(&account_id)?;
+        let status: VaultStatus = match request(&device.server, Method::GET, "vault/status", Some(&device.token), None).await {
+            Err(message) if message.starts_with("同步服务返回 HTTP 404 ") => return Ok(None),
+            result => result?,
+        };
+        Ok(Some(status.revision == known.revision
+            && status.fingerprint.as_deref() == Some(known.fingerprint.as_str())
+            && known.credential_generation == sync_credential_generation()))
+    }.await;
+    result.map_err(|e: String| error("host_sync_probe", e))
+}
+
+#[tauri::command]
 pub(crate) async fn host_sync_exchange(
     account_id: String, configuration: Configuration, base: Option<Vault>, resolution: Option<Resolution>,
     recover: Option<bool>,
@@ -737,6 +784,7 @@ pub(crate) async fn host_sync_exchange(
     let result = async {
         let device = require_device(&account_id)?;
         let mut blocked = Vec::new();
+        let generation = sync_credential_generation();
         let raw_local = capture(configuration, &mut blocked)?;
         let RemoteVault { revision, vault } =
             request(&device.server, Method::GET, "vault", Some(&device.token), None).await?;
@@ -756,7 +804,7 @@ pub(crate) async fn host_sync_exchange(
             request::<Value>(&device.server, Method::POST, "vault/recover", Some(&device.token), Some(json!({
                 "revision": revision, "nextRevision": next, "vault": repaired,
             }))).await?;
-            return Ok(SyncResult { base: repaired, expected_local: None, conflict_snapshot: None, conflicts: Vec::new(), blocked });
+            return Ok(SyncResult { base: repaired, inspection: None, expected_local: None, conflict_snapshot: None, conflicts: Vec::new(), blocked });
         }
         if recover == Some(true) {
             return Err("云端版本已更新，请重新同步".into());
@@ -792,7 +840,7 @@ pub(crate) async fn host_sync_exchange(
         if !conflicts.is_empty() {
             return Ok(SyncResult {
                 conflict_snapshot: Some(conflict_snapshot(&device, &vault, &raw_local, &previous)?),
-                base: vault, expected_local: None, conflicts, blocked,
+                base: vault, inspection: None, expected_local: None, conflicts, blocked,
             });
         }
         validate_links(&combined)?;
@@ -802,14 +850,16 @@ pub(crate) async fn host_sync_exchange(
         });
         let expected_local = (previous != cloud || repairable)
             .then(|| seal(&device, revision, &raw_local)).transpose()?;
-        let base = if combined == cloud {
-            vault
+        let (base, current_revision) = if combined == cloud {
+            (vault, revision)
         } else {
-            let vault = seal(&device, revision.checked_add(1).ok_or("同步版本超出范围")?, &combined)?;
+            let next = revision.checked_add(1).ok_or("同步版本超出范围")?;
+            let vault = seal(&device, next, &combined)?;
             request::<Value>(&device.server, Method::PUT, "vault", Some(&device.token), Some(json!({ "revision": revision, "vault": vault }))).await?;
-            vault
+            (vault, next)
         };
-        Ok(SyncResult { base, expected_local, conflict_snapshot: None, conflicts, blocked })
+        let inspection = inspection(&base, current_revision, generation)?;
+        Ok(SyncResult { base, inspection: Some(inspection), expected_local, conflict_snapshot: None, conflicts, blocked })
     }.await;
     result.map_err(|e: String| error("host_sync_exchange", e))
 }

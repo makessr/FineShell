@@ -68,16 +68,16 @@ pub(crate) fn restore_backup_credential(
         return Err("凭据归属标识和值不能为空".to_string());
     }
     let entry = backup_credential_entry(kind, owner_id)?;
-    entry
+    changed_for_sync(entry
         .set_password(value)
-        .map_err(|error| format!("恢复系统凭据失败：{error}"))
+        .map_err(|error| format!("恢复系统凭据失败：{error}")))
 }
 
 pub(crate) fn delete_backup_credential(kind: &str, owner_id: &str) -> Result<(), String> {
-    match backup_credential_entry(kind, owner_id)?.delete_credential() {
+    changed_for_sync(match backup_credential_entry(kind, owner_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(format!("删除系统凭据失败：{error}")),
-    }
+    })
 }
 
 fn ai_api_key_entry() -> Result<keyring::Entry, String> {
@@ -292,6 +292,18 @@ fn ai_api_key_status_inner() -> Result<bool, String> {
     }
 }
 
+static SYNC_CREDENTIAL_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn sync_credential_generation() -> u64 {
+    SYNC_CREDENTIAL_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn changed_for_sync<T>(result: Result<T, String>) -> Result<T, String> {
+    SYNC_CREDENTIAL_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    result
+}
+
 fn structured<T>(
     operation: &'static str,
     result: Result<T, String>,
@@ -306,7 +318,7 @@ pub(crate) fn copy_host_credentials(
 ) -> crate::protocol::CommandResult<CopyHostCredentialsResult> {
     structured(
         "copy_host_credentials",
-        copy_host_credentials_inner(source_host_id, target_host_id),
+        changed_for_sync(copy_host_credentials_inner(source_host_id, target_host_id)),
     )
 }
 
@@ -324,13 +336,13 @@ pub(crate) fn store_host_password(
 ) -> crate::protocol::CommandResult<()> {
     structured(
         "store_host_password",
-        store_host_password_inner(host_id, password),
+        changed_for_sync(store_host_password_inner(host_id, password)),
     )
 }
 
 #[tauri::command]
 pub(crate) fn delete_host_password(host_id: String) -> crate::protocol::CommandResult<()> {
-    structured("delete_host_password", delete_host_password_inner(host_id))
+    structured("delete_host_password", changed_for_sync(delete_host_password_inner(host_id)))
 }
 
 #[tauri::command]
@@ -340,7 +352,7 @@ pub(crate) fn store_private_key_passphrase(
 ) -> crate::protocol::CommandResult<()> {
     structured(
         "store_private_key_passphrase",
-        store_private_key_passphrase_inner(host_id, passphrase),
+        changed_for_sync(store_private_key_passphrase_inner(host_id, passphrase)),
     )
 }
 
@@ -348,7 +360,7 @@ pub(crate) fn store_private_key_passphrase(
 pub(crate) fn delete_private_key_passphrase(host_id: String) -> crate::protocol::CommandResult<()> {
     structured(
         "delete_private_key_passphrase",
-        delete_private_key_passphrase_inner(host_id),
+        changed_for_sync(delete_private_key_passphrase_inner(host_id)),
     )
 }
 
@@ -359,7 +371,7 @@ pub(crate) fn store_proxy_password(
 ) -> crate::protocol::CommandResult<()> {
     structured(
         "store_proxy_password",
-        store_proxy_password_inner(proxy_id, password),
+        changed_for_sync(store_proxy_password_inner(proxy_id, password)),
     )
 }
 
@@ -367,7 +379,7 @@ pub(crate) fn store_proxy_password(
 pub(crate) fn delete_proxy_password(proxy_id: String) -> crate::protocol::CommandResult<()> {
     structured(
         "delete_proxy_password",
-        delete_proxy_password_inner(proxy_id),
+        changed_for_sync(delete_proxy_password_inner(proxy_id)),
     )
 }
 

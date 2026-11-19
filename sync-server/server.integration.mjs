@@ -82,6 +82,46 @@ test("invite and verification are bound to one email, consumed once, and allow a
   }
 });
 
+test("validates a vault status probe and rate limits untrusted forwarded IPs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fineshell-sync-control-"));
+  const server = createSyncServer(join(dir, "vault.sqlite"));
+  try {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = "http://127.0.0.1:" + server.address().port + "/v1/";
+    const send = (route, body, token, method = "POST", headers = {}) => fetch(base + route, {
+      method,
+      headers: { "content-type": "application/json", ...(token && { authorization: "Bearer " + token }), ...headers },
+      body: JSON.stringify(body),
+    });
+    const registration = await send("register", { email: "next@example.com", password: "test-only-password" });
+    assert.equal(registration.status, 200);
+    const { token } = await registration.json();
+    const probe = (token) => fetch(base + "vault/status", { headers: { authorization: "Bearer " + token } });
+    assert.equal((await probe("invalid")).status, 401);
+    assert.deepEqual(await (await probe(token)).json(), { revision: 0, fingerprint: null });
+    const bytes = (length) => randomBytes(length).toString("base64");
+    const vault = {
+      version: 1,
+      wrappedKey: { algorithm: "XChaCha20-Poly1305", kdf: "Argon2id",
+        salt: bytes(16), nonce: bytes(24), ciphertext: bytes(48) },
+      nonce: bytes(24), ciphertext: bytes(96),
+    };
+    assert.equal((await send("vault", { revision: 0, vault }, token, "PUT")).status, 200);
+    assert.deepEqual(await (await probe(token)).json(), {
+      revision: 1, fingerprint: createHash("sha256").update(JSON.stringify(vault)).digest("hex"),
+    });
+
+    for (let index = 1; index <= 11; index++) {
+      const failed = await send("registration/verify", {}, undefined, "POST", { "x-real-ip": "192.0.2." + index });
+      assert.equal(failed.status, index <= 10 ? 405 : 429);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("migrates a legacy session without forcing the device to log in", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fineshell-legacy-sync-"));
   const database = join(dir, "vault.sqlite");

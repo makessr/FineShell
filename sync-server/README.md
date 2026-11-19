@@ -48,6 +48,8 @@ systemd 管理 `/var/lib/fineshell-sync`，重启和升级保留数据。发信�
 
 两种方式都可以在本机前置 Nginx 或其他反向代理终止 HTTPS。代理到 `127.0.0.1:8787`，转发 `Authorization`，请求体上限至少为 8 MiB。跨设备客户端填写 HTTPS 域名。
 
+登录、注册和验证码接口同时使用来源限流。systemd 直连回环反向代理部署可让 Nginx 覆盖 `X-Real-IP`（`proxy_set_header X-Real-IP $remote_addr;`），然后在服务端配置增加 `FINESHELL_SYNC_TRUST_LOOPBACK_PROXY=1`。只有来自回环的连接才能使用这个头。服务日志记录异常注册及限流的汇总数量，包含 `FineShell authentication activity` 的条目可接入告警。
+
 ## 邀请注册与邮箱验证
 
 默认模式 `open` 兼容原有自助注册。启用邀请制时，将服务端配置中的 `FINESHELL_SYNC_REGISTRATION` 设为 `invite`。现有账号可以继续登录。新账号需要管理员分发的邀请码和验证码。邀请码绑定邮箱、七天有效，注册成功后即失效。邮箱验证码有效期为 15 分钟。
