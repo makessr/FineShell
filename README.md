@@ -115,6 +115,8 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 - Windows x64 提供 `.exe`（NSIS）和 `.msi`。
 - Windows ARM64 提供 `.exe`（NSIS）。
 
+从 v0.2.0 升级到 v0.3.0 时，请退出 FineShell，下载与当前架构和安装方式一致的安装包，再覆盖安装。v0.2.0 和 v0.3.0 的应用内更新会拒绝本仓库的下载地址。
+
 macOS 和 Linux 可以从源码构建，也可在 [上游 Releases](https://github.com/Max0897/FineShell/releases) 获取上游版本的安装包。
 
 ### Linux 安装

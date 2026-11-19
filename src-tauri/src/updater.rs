@@ -162,11 +162,15 @@ fn route_url(route: &UpdateRoute, source: &Url) -> Result<Url, String> {
     }
 }
 
-fn validate_fineshell_download_url(url: &Url) -> Result<(), String> {
-    let path = url.path().to_ascii_lowercase();
-    if url.scheme() != "https"
-        || url.host_str() != Some("github.com")
-        || !path.starts_with("/max0897/fineshell/releases/download/")
+fn validate_fineshell_download_url(manifest: &Url, url: &Url) -> Result<(), String> {
+    let releases = manifest
+        .join("../../download/")
+        .map_err(|_| "无法确定受信任的更新下载路径".to_string())?;
+    if url.origin() != releases.origin()
+        || !url
+            .path()
+            .to_ascii_lowercase()
+            .starts_with(&releases.path().to_ascii_lowercase())
     {
         return Err("更新清单包含不受信任的下载地址".to_string());
     }
@@ -219,7 +223,7 @@ pub(crate) async fn application_update_check(
         match updater.check().await {
             Ok(None) => return Ok(None),
             Ok(Some(mut update)) => {
-                if let Err(error) = validate_fineshell_download_url(&update.download_url) {
+                if let Err(error) = validate_fineshell_download_url(&source, &update.download_url) {
                     last_error = Some(error);
                     continue;
                 }
@@ -413,8 +417,8 @@ pub(crate) async fn application_update_test_route(
 #[cfg(test)]
 mod tests {
     use super::{
-        mirrored_url, normalized_mirror_prefix, update_routes, ApplicationUpdateRequest,
-        BUILTIN_MIRRORS,
+        mirrored_url, normalized_mirror_prefix, update_routes, validate_fineshell_download_url,
+        ApplicationUpdateRequest, BUILTIN_MIRRORS, FINESHELL_LATEST_RELEASE_URL,
     };
     use tauri::Url;
 
@@ -423,6 +427,24 @@ mod tests {
             route: route.to_string(),
             custom_url: custom_url.map(ToString::to_string),
         }
+    }
+
+    #[test]
+    fn accepts_only_release_downloads_from_the_manifest_repository() {
+        let source = Url::parse(FINESHELL_LATEST_RELEASE_URL).unwrap();
+        let download = |owner, repository| {
+            Url::parse(&format!(
+                "https://github.com/{owner}/{repository}/releases/download/v0.3.0/setup.exe"
+            ))
+            .unwrap()
+        };
+        assert!(validate_fineshell_download_url(&source, &download("makessr", "FineShell")).is_ok());
+        assert!(validate_fineshell_download_url(&source, &download("Max0897", "FineShell")).is_err());
+        let other_repository = download("makessr", "FineShell-other");
+        assert!(validate_fineshell_download_url(&source, &other_repository).is_err());
+        let mut insecure = download("makessr", "FineShell");
+        insecure.set_scheme("http").unwrap();
+        assert!(validate_fineshell_download_url(&source, &insecure).is_err());
     }
 
     #[test]
