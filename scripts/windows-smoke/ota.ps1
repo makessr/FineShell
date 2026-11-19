@@ -63,7 +63,7 @@ $policyAdded = $false
 try {
     if ($UseHostedRunnerWebView2Policy) {
         if (!(Test-Path -LiteralPath $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
-        if ($null -ne (Get-ItemPropertyValue -LiteralPath $policyPath -Name $policyName -ErrorAction SilentlyContinue)) {
+        if ((Get-Item -LiteralPath $policyPath).GetValueNames() -contains $policyName) {
             throw 'FineShell already has a machine WebView2 policy.'
         }
         New-ItemProperty -LiteralPath $policyPath -Name $policyName -Value $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -PropertyType String | Out-Null
