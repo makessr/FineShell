@@ -1,9 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Alert, Button, Input, Message, Popconfirm, Space, Typography } from "@arco-design/web-react";
 import { isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { commandErrorMessage } from "../tauri-protocol";
 import {
   hostSyncAccount,
+  hostSyncDevices,
+  relinkHostSyncKey,
+  type BlockedSyncRecord,
+  type HostSyncDevice,
+  type SyncOptions,
   hostSyncIsBound,
   hostSyncRecoveryKey,
   isHostSyncStorageEvent,
@@ -24,6 +30,10 @@ export default function HostSyncSettings() {
     import.meta.env.VITE_FINESHELL_SYNC_URL || "https://auto.itfans.fun",
   );
   const [email, setEmail] = useState("");
+  const [deviceName, setDeviceName] = useState("");
+  const [devices, setDevices] = useState<HostSyncDevice[]>([]);
+  const [deviceError, setDeviceError] = useState("");
+  const [choices, setChoices] = useState<Record<string, boolean>>({});
   const [password, setPassword] = useState("");
   const [recoveryKey, setRecoveryKey] = useState("");
   const [confirmedKey, setConfirmedKey] = useState("");
@@ -44,7 +54,10 @@ export default function HostSyncSettings() {
       if (mounted) setLoading(false);
     });
     function refresh(event: StorageEvent) {
-      if (isHostSyncStorageEvent(event)) setStatus(readHostSyncStatus());
+      if (isHostSyncStorageEvent(event)) {
+        setStatus(readHostSyncStatus());
+        setChoices({});
+      }
     }
     window.addEventListener("storage", refresh);
     return () => {
@@ -52,6 +65,59 @@ export default function HostSyncSettings() {
       window.removeEventListener("storage", refresh);
     };
   }, []);
+
+  const accountId = account?.accountId;
+  useEffect(() => {
+    if (!accountId || status?.signInRequired) return;
+    let active = true;
+    void hostSyncDevices(accountId).then((value) => {
+      if (active) {
+        setDevices(value);
+        setDeviceError("");
+      }
+    }).catch((error) => {
+      if (active) setDeviceError(commandErrorMessage(error));
+    });
+    return () => { active = false; };
+  }, [accountId, status?.signInRequired]);
+
+  async function refreshDevices(revoke?: string) {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      setDevices(await hostSyncDevices(accountId, revoke));
+      setDeviceError("");
+    } catch (error) {
+      setDeviceError(commandErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function relink(issue: BlockedSyncRecord) {
+    try {
+      const path = await open({ title: "选择 SSH 私钥文件", multiple: false, directory: false });
+      if (typeof path === "string") await relinkHostSyncKey(issue, path);
+    } catch (error) {
+      Message.error(commandErrorMessage(error));
+    }
+  }
+
+  function describe(record: Record<string, unknown> | null, other: Record<string, unknown> | null) {
+    if (!record) return "已删除";
+    const keys = new Set([...Object.keys(record), ...Object.keys(other ?? {})]);
+    const fields = [...keys]
+      .filter((key) => key !== "id" && key !== "name" &&
+        JSON.stringify(record[key]) !== JSON.stringify(other?.[key]))
+      .map((key) => [key, record[key] ?? null]);
+    return <div>
+      {String(record.name ?? "")}
+      {fields.length > 0 && <details>
+        <summary>查看配置差异</summary>
+        <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(Object.fromEntries(fields), null, 2)}</pre>
+      </details>}
+    </div>;
+  }
 
   async function changeMode(next: boolean) {
     try {
@@ -68,7 +134,7 @@ export default function HostSyncSettings() {
     event.preventDefault();
     setBusy(true);
     try {
-      setAccount(await signInToHostSync({ server, email, password, recoveryKey, register }));
+      setAccount(await signInToHostSync({ server, email, password, recoveryKey, register, deviceName }));
       setStatus(null);
       setRegister(false);
       setRecoveryKey("");
@@ -96,8 +162,8 @@ export default function HostSyncSettings() {
     }
   }
 
-  function sync(keepLocal?: boolean) {
-    void requestHostSync(keepLocal).catch((error) => Message.error(commandErrorMessage(error)));
+  function sync(options: SyncOptions = {}) {
+    void requestHostSync({ ...options, manual: true }).catch((error) => Message.error(commandErrorMessage(error)));
   }
 
   if (!isTauri()) return <Alert content="请在 FineShell 桌面应用中使用主机同步。" />;
@@ -107,7 +173,7 @@ export default function HostSyncSettings() {
     return (
       <Space direction="vertical" size="large">
         <Typography.Text>{account.email}</Typography.Text>
-        {status?.state === "failed" && <Alert type="error" content={status.message} />}
+        {status?.message && <Alert type="error" content={status.message} />}
         {status?.state === "working" && <Typography.Text>正在同步主机…</Typography.Text>}
         {status?.time && (
           <Typography.Text type="secondary">
@@ -118,16 +184,63 @@ export default function HostSyncSettings() {
           <Button type="primary" onClick={() => sync()}>立即同步</Button>
           <Button loading={busy} onClick={() => void signOut()}>退出登录</Button>
         </Space>
-        {status?.conflict && (
-          <Space wrap>
-            <Popconfirm content="用本机版本覆盖所有冲突项？" onOk={() => sync(true)}>
-              <Button>冲突项保留本机版本</Button>
-            </Popconfirm>
-            <Popconfirm content="用云端版本覆盖所有冲突项？" onOk={() => sync(false)}>
-              <Button>冲突项保留云端版本</Button>
-            </Popconfirm>
+        {status?.recoverable && (
+          <Popconfirm content="以这台设备最后验证的快照恢复云端？" onOk={() => sync({ recover: true })}>
+            <Button status="warning">恢复云端快照</Button>
+          </Popconfirm>
+        )}
+        {status?.blocked?.map((issue) => (
+          <Space key={issue.kind + "/" + issue.id} wrap>
+            <Typography.Text>{issue.name} 的 SSH 密钥或关联主机无法读取</Typography.Text>
+            {issue.relink && <Button onClick={() => void relink(issue)}>重新关联私钥</Button>}
+          </Space>
+        ))}
+        {!!status?.conflicts?.length && status.snapshot && (
+          <Space direction="vertical">
+            <Typography.Title heading={6}>解决同步冲突</Typography.Title>
+            {status.conflicts.map((conflict) => (
+              <fieldset key={conflict.id}>
+                <legend>{String(conflict.local?.name ?? conflict.cloud?.name ?? conflict.id)}</legend>
+                {conflict.credentialChanged && <Typography.Text>两端凭据有差异</Typography.Text>}
+                {(["local", "cloud"] as const).map((side) => (
+                  <div key={side}>
+                    <label>
+                      <input type="radio" name={conflict.id} autoComplete="off"
+                        checked={choices[conflict.id] === (side === "local")}
+                        onChange={() => setChoices((current) => ({ ...current, [conflict.id]: side === "local" }))}
+                      />
+                      {side === "local" ? "保留本机版本" : "保留云端版本"}
+                    </label>
+                    {describe(conflict[side], conflict[side === "local" ? "cloud" : "local"])}
+                  </div>
+                ))}
+              </fieldset>
+            ))}
+            <Button type="primary" disabled={status.conflicts.some(({ id }) => choices[id] === undefined)}
+              onClick={() => status.snapshot && sync({ resolution: { snapshot: status.snapshot, choices } })}>
+              应用选择并同步
+            </Button>
           </Space>
         )}
+        <Space direction="vertical">
+          <Typography.Title heading={6}>已登录设备</Typography.Title>
+          {deviceError && <Alert type="warning" content={deviceError} />}
+          {devices.map((device) => (
+            <Space key={device.id} wrap>
+              <Typography.Text>{device.name}{device.current ? "（本机）" : ""}</Typography.Text>
+              <Typography.Text type="secondary">
+                {device.lastSyncAt ? new Date(device.lastSyncAt).toLocaleString() : "尚无同步记录"}
+              </Typography.Text>
+              {!device.current && (
+                <Popconfirm content="撤销后，该设备必须重新登录才能同步。"
+                  onOk={() => refreshDevices(device.id)}>
+                  <Button status="danger" loading={busy}>撤销登录</Button>
+                </Popconfirm>
+              )}
+            </Space>
+          ))}
+          <Button loading={busy} onClick={() => void refreshDevices()}>刷新设备列表</Button>
+        </Space>
       </Space>
     );
   }
@@ -146,6 +259,10 @@ export default function HostSyncSettings() {
         <label>
           邮箱
           <Input value={email} onChange={setEmail} autoComplete="username" />
+        </label>
+        <label>
+          设备名称
+          <Input value={deviceName} onChange={setDeviceName} maxLength={80} placeholder="例如 Windows 台式机" />
         </label>
         <label>
           账号密码

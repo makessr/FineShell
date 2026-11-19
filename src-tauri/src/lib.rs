@@ -87,6 +87,7 @@ pub fn run() {
             host_sync::host_sync_recovery_key,
             host_sync::host_sync_login,
             host_sync::host_sync_logout,
+            host_sync::host_sync_devices,
             host_sync::host_sync_exchange,
             host_sync::host_sync_apply,
             protocol::protocol_version,

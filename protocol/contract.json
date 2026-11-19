@@ -1,11 +1,12 @@
 {
-  "version": 37,
+  "version": 38,
   "commands": {
     "protocol_version": true,
     "host_sync_account": true,
     "host_sync_recovery_key": true,
     "host_sync_login": true,
     "host_sync_logout": true,
+    "host_sync_devices": true,
     "host_sync_exchange": true,
     "host_sync_apply": true,
     "open_settings_window": true,

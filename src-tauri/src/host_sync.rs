@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::{Client, Method, StatusCode, Url};
+use chacha20poly1305::{aead::{Aead, AeadCore, OsRng, Payload}, KeyInit, XChaCha20Poly1305, XNonce};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -59,6 +60,16 @@ pub(crate) struct Account {
     account_id: String,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeviceInfo {
+    id: String,
+    name: String,
+    current: bool,
+    last_sync_at: Option<u64>,
+    expires_at: u64,
+}
+
 impl Device {
     fn account(&self) -> Account {
         Account {
@@ -69,7 +80,7 @@ impl Device {
     }
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct Record {
     metadata: Value,
@@ -77,7 +88,7 @@ struct Record {
     private_key: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Default, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 struct Records {
     hosts: BTreeMap<String, Record>,
     keys: BTreeMap<String, Record>,
@@ -111,6 +122,37 @@ pub(crate) struct AppliedConfiguration {
 pub(crate) struct SyncResult {
     base: Vault,
     expected_local: Option<Vault>,
+    conflict_snapshot: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    conflicts: Vec<Conflict>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    blocked: Vec<BlockedRecord>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockedRecord {
+    kind: &'static str,
+    id: String,
+    name: String,
+    preserve: bool,
+    relink: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Conflict {
+    id: String,
+    local: Option<Value>,
+    cloud: Option<Value>,
+    credential_changed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Resolution {
+    snapshot: String,
+    choices: BTreeMap<String, bool>,
 }
 
 fn error(operation: &'static str, message: impl Into<String>) -> CommandError {
@@ -217,6 +259,40 @@ fn open(device: &Device, vault: &Vault) -> Result<(u64, Records), String> {
     Ok((revision, records))
 }
 
+fn conflict_snapshot_data(
+    device: &Device, vault: &Vault, local: &Records, base: &Records,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&("fineshell-host-sync-conflict-v1", &device.account_id, vault, local, base))
+        .map_err(|_| "无法记录同步冲突".to_string())
+}
+
+fn conflict_snapshot(
+    device: &Device, vault: &Vault, local: &Records, base: &Records,
+) -> Result<String, String> {
+    let bytes = conflict_snapshot_data(device, vault, local, base)?;
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let cipher = XChaCha20Poly1305::new((&device.key).into());
+    let tag = cipher.encrypt(&nonce, Payload { msg: &[], aad: &bytes })
+        .map_err(|_| "无法验证同步冲突")?;
+    Ok(URL_SAFE_NO_PAD.encode([&nonce[..], &tag].concat()))
+}
+
+fn verifies_conflict(
+    device: &Device, vault: &Vault, local: &Records, base: &Records, snapshot: &str,
+) -> Result<bool, String> {
+    if snapshot.len() != 54 {
+        return Ok(false);
+    }
+    let token = match URL_SAFE_NO_PAD.decode(snapshot) {
+        Ok(token) if token.len() == 40 => token,
+        _ => return Ok(false),
+    };
+    let (nonce, tag) = token.split_at(24);
+    let bytes = conflict_snapshot_data(device, vault, local, base)?;
+    let cipher = XChaCha20Poly1305::new((&device.key).into());
+    Ok(cipher.decrypt(XNonce::from_slice(nonce), Payload { msg: tag, aad: &bytes }).is_ok())
+}
+
 fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
     value[name]
         .as_str()
@@ -241,7 +317,21 @@ fn portable_key(metadata: &mut Value) -> Result<String, String> {
     Ok(key)
 }
 
-fn capture(configuration: Configuration) -> Result<Records, String> {
+fn capture(configuration: Configuration, blocked: &mut Vec<BlockedRecord>) -> Result<Records, String> {
+    let mut read_key = |kind, id: &str, value: &mut Value| {
+        let key = portable_key(value).ok();
+        if key.is_none() {
+            value.as_object_mut().unwrap().remove("privateKeyPath");
+            blocked.push(BlockedRecord {
+                kind,
+                id: id.to_string(),
+                name: value["name"].as_str().unwrap_or(id).to_string(),
+                preserve: false,
+                relink: true,
+            });
+        }
+        key
+    };
     let hosts = insert_records(configuration.hosts, |mut metadata, id| {
         let fields = metadata.as_object_mut().ok_or("主机配置无效")?;
         fields.remove("lastConnectedAt");
@@ -250,7 +340,7 @@ fn capture(configuration: Configuration) -> Result<Records, String> {
             "password" => (read_backup_credential("hostPassword", id)?, None),
             "privateKey" if metadata["sshKeyId"].is_null() => (
                 read_backup_credential("privateKeyPassphrase", id)?,
-                Some(portable_key(&mut metadata)?),
+                read_key("hosts", id, &mut metadata),
             ),
             "privateKey" | "agent" => (None, None),
             _ => return Err("不支持的 SSH 认证类型".into()),
@@ -258,7 +348,7 @@ fn capture(configuration: Configuration) -> Result<Records, String> {
         Ok(Record { metadata, secret, private_key })
     })?;
     let keys = insert_records(configuration.keys, |mut metadata, id| {
-        let private_key = Some(portable_key(&mut metadata)?);
+        let private_key = read_key("keys", id, &mut metadata);
         metadata.as_object_mut().ok_or("SSH 密钥配置无效")?.remove("source");
         Ok(Record {
             metadata,
@@ -274,6 +364,58 @@ fn capture(configuration: Configuration) -> Result<Records, String> {
         })
     })?;
     Ok(Records { hosts, keys, proxies })
+}
+
+fn prepare_capture(
+    mut local: Records, base: &Records, cloud: &Records, blocked: &mut Vec<BlockedRecord>,
+) -> Records {
+    for issue in blocked.iter_mut() {
+        let (records, previous, remote) = if issue.kind == "keys" {
+            (&mut local.keys, &base.keys, &cloud.keys)
+        } else {
+            (&mut local.hosts, &base.hosts, &cloud.hosts)
+        };
+        if let Some(fallback) = previous.get(&issue.id).or_else(|| remote.get(&issue.id)) {
+            issue.preserve = records.get(&issue.id).is_some_and(|record| {
+                record.metadata != fallback.metadata || record.secret != fallback.secret
+            });
+            records.insert(issue.id.clone(), fallback.clone());
+        } else {
+            issue.preserve = true;
+            records.remove(&issue.id);
+        }
+    }
+    for _ in 0..local.hosts.len() {
+        let missing: Vec<_> = local.hosts.iter().filter(|(_, host)| {
+            host.metadata["sshKeyId"].as_str().is_some_and(|id| {
+                !local.keys.contains_key(id) && !base.keys.contains_key(id) && !cloud.keys.contains_key(id)
+            }) || host.metadata["jumpHostId"].as_str().is_some_and(|id| {
+                !local.hosts.contains_key(id) && !base.hosts.contains_key(id) && !cloud.hosts.contains_key(id)
+            })
+        }).map(|(id, _)| id.clone()).collect();
+        if missing.is_empty() {
+            break;
+        }
+        for id in missing {
+            let Some(host) = local.hosts.remove(&id) else { continue };
+            let fallback = base.hosts.get(&id).or_else(|| cloud.hosts.get(&id));
+            if let Some(issue) = blocked.iter_mut().find(|issue| issue.kind == "hosts" && issue.id == id) {
+                issue.preserve = true;
+            } else {
+                blocked.push(BlockedRecord {
+                    kind: "hosts",
+                    name: host.metadata["name"].as_str().unwrap_or(&id).to_string(),
+                    id: id.clone(),
+                    preserve: true,
+                    relink: false,
+                });
+            }
+            if let Some(fallback) = fallback {
+                local.hosts.insert(id, fallback.clone());
+            }
+        }
+    }
+    local
 }
 
 fn validate_links(records: &Records) -> Result<(), String> {
@@ -302,8 +444,10 @@ fn merge_map(
     base: &BTreeMap<String, Record>,
     local: BTreeMap<String, Record>,
     cloud: &BTreeMap<String, Record>,
-    keep_local: Option<bool>,
-) -> Result<BTreeMap<String, Record>, String> {
+    kind: &str,
+    choices: Option<&BTreeMap<String, bool>>,
+    conflicts: &mut Vec<Conflict>,
+) -> BTreeMap<String, Record> {
     let mut merged = BTreeMap::new();
     let ids: std::collections::BTreeSet<_> =
         base.keys().chain(local.keys()).chain(cloud.keys()).collect();
@@ -311,24 +455,30 @@ fn merge_map(
         let previous = base.get(id);
         let here = local.get(id);
         let there = cloud.get(id);
+        let conflict_id = format!("{kind}/{id}");
         let resolved = if here == there || there == previous {
             here
         } else if here == previous {
             there
-        } else if let Some(local_wins) = keep_local {
+        } else if let Some(local_wins) = choices.and_then(|choices| choices.get(&conflict_id)).copied() {
             if local_wins { here } else { there }
         } else {
-            return Err("同步冲突：两台设备修改了同一项，请在主机同步设置中选择保留哪一方".into());
+            conflicts.push(Conflict {
+                id: conflict_id,
+                local: here.map(|record| record.metadata.clone()),
+                cloud: there.map(|record| record.metadata.clone()),
+                credential_changed: here.and_then(|record| record.secret.as_ref())
+                    != there.and_then(|record| record.secret.as_ref())
+                    || here.and_then(|record| record.private_key.as_ref())
+                        != there.and_then(|record| record.private_key.as_ref()),
+            });
+            continue;
         };
         if let Some(record) = resolved {
-            merged.insert(id.clone(), Record {
-                metadata: record.metadata.clone(),
-                secret: record.secret.clone(),
-                private_key: record.private_key.clone(),
-            });
+            merged.insert(id.clone(), record.clone());
         }
     }
-    Ok(merged)
+    merged
 }
 
 fn put_secret(kind: &str, id: &str, secret: Option<&str>) -> Result<(), String> {
@@ -356,8 +506,12 @@ fn install_key(
     install_sync_key(&id, key)
 }
 
-fn apply_records(records: Records, current: Configuration) -> Result<AppliedConfiguration, String> {
+fn apply_records(
+    mut records: Records, current: Configuration, preserve_hosts: &[String], preserve_keys: &[String],
+) -> Result<AppliedConfiguration, String> {
     validate_links(&records)?;
+    records.hosts.retain(|id, _| !preserve_hosts.contains(id));
+    records.keys.retain(|id, _| !preserve_keys.contains(id));
     let old_hosts = current.hosts.iter().filter_map(|host| Some((host["id"].as_str()?, host))).collect::<BTreeMap<_, _>>();
     let old_keys = current.keys.iter().filter_map(|key| Some((key["id"].as_str()?, key))).collect::<BTreeMap<_, _>>();
     let mut result = Configuration { hosts: Vec::new(), keys: Vec::new(), proxies: Vec::new() };
@@ -432,7 +586,7 @@ pub(crate) fn host_sync_account() -> CommandResult<Option<Account>> {
 #[tauri::command]
 pub(crate) async fn host_sync_login(
     server: String, email: String, password: String, recovery_key: String, register: bool,
-    bound_account: Option<String>,
+    bound_account: Option<String>, device_name: Option<String>,
 ) -> CommandResult<Account> {
     let result = async {
         let server = server_url(&server)?;
@@ -448,7 +602,9 @@ pub(crate) async fn host_sync_login(
             return Err("此 FineShell 配置已绑定同步账号".into());
         }
         let path = if register { "register" } else { "login" };
-        let login: Login = request(&server, Method::POST, path, None, Some(json!({ "email": email, "password": password }))).await?;
+        let login: Login = request(&server, Method::POST, path, None, Some(json!({
+            "email": email, "password": password, "deviceName": device_name,
+        }))).await?;
         if bound_account.as_ref().is_some_and(|id| id != &login.account_id) {
             return Err("此 FineShell 配置已绑定另一个同步账号".into());
         }
@@ -503,32 +659,101 @@ pub(crate) async fn host_sync_logout() -> CommandResult<()> {
 }
 
 #[tauri::command]
+pub(crate) async fn host_sync_devices(
+    account_id: String,
+    revoke: Option<String>,
+    mark_synced: Option<bool>,
+) -> CommandResult<Vec<DeviceInfo>> {
+    let result = async {
+        let device = require_device(&account_id)?;
+        if mark_synced == Some(true) {
+            request::<Value>(&device.server, Method::POST, "devices/synced", Some(&device.token), None).await?;
+            return Ok(Vec::new());
+        }
+        if let Some(id) = revoke {
+            if id.len() != 32 || !id.bytes().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err("设备标识无效".into());
+            }
+            request::<Value>(&device.server, Method::DELETE, &format!("devices/{id}"), Some(&device.token), None).await?;
+        }
+        request(&device.server, Method::GET, "devices", Some(&device.token), None).await
+    }.await;
+    result.map_err(|e: String| error("host_sync_devices", e))
+}
+
+#[tauri::command]
 pub(crate) async fn host_sync_exchange(
-    account_id: String, configuration: Configuration, base: Option<Vault>, keep_local: Option<bool>,
+    account_id: String, configuration: Configuration, base: Option<Vault>, resolution: Option<Resolution>,
+    recover: Option<bool>,
 ) -> CommandResult<SyncResult> {
     let result = async {
         let device = require_device(&account_id)?;
-        let local = capture(configuration)?;
+        let mut blocked = Vec::new();
+        let raw_local = capture(configuration, &mut blocked)?;
         let RemoteVault { revision, vault } =
             request(&device.server, Method::GET, "vault", Some(&device.token), None).await?;
         let vault = vault.ok_or("同步账号尚未初始化")?;
         let (signed_revision, cloud) = open(&device, &vault)?;
         let (previous_revision, previous) = base.as_ref().map(|vault| open(&device, vault))
             .transpose()?.unwrap_or_default();
-        if signed_revision != revision || revision < previous_revision
-            || (revision == previous_revision && previous != cloud)
-        {
+        if signed_revision != revision || (revision == previous_revision && previous != cloud) {
             return Err("云端同步版本异常，请检查同步服务的数据".into());
         }
-        let expected_local = (previous != cloud)
-            .then(|| seal(&device, revision, &local)).transpose()?;
-        let Records { hosts, keys, proxies } = local;
-        let combined = Records {
-            hosts: merge_map(&previous.hosts, hosts, &cloud.hosts, keep_local)?,
-            keys: merge_map(&previous.keys, keys, &cloud.keys, keep_local)?,
-            proxies: merge_map(&previous.proxies, proxies, &cloud.proxies, keep_local)?,
+        if revision < previous_revision {
+            if recover != Some(true) {
+                return Err("云端快照落后于本机已验证版本，请在设置中确认恢复".into());
+            }
+            let next = previous_revision.checked_add(1).ok_or("同步版本超出范围")?;
+            let repaired = seal(&device, next, &previous)?;
+            request::<Value>(&device.server, Method::POST, "vault/recover", Some(&device.token), Some(json!({
+                "revision": revision, "nextRevision": next, "vault": repaired,
+            }))).await?;
+            return Ok(SyncResult { base: repaired, expected_local: None, conflict_snapshot: None, conflicts: Vec::new(), blocked });
+        }
+        if recover == Some(true) {
+            return Err("云端版本已更新，请重新同步".into());
+        }
+        let choices = if let Some(resolution) = &resolution {
+            verifies_conflict(&device, &vault, &raw_local, &previous, &resolution.snapshot)?
+                .then_some(&resolution.choices)
+        } else {
+            None
         };
+        let local = prepare_capture(raw_local.clone(), &previous, &cloud, &mut blocked);
+        let unavailable_keys: std::collections::BTreeSet<_> = blocked.iter()
+            .filter(|issue| issue.kind == "keys")
+            .map(|issue| issue.id.clone()).collect();
+        for (id, host) in &raw_local.hosts {
+            if host.metadata["sshKeyId"].as_str().is_some_and(|key| unavailable_keys.contains(key))
+                && !blocked.iter().any(|issue| issue.kind == "hosts" && issue.id == *id)
+            {
+                blocked.push(BlockedRecord {
+                    kind: "hosts", id: id.clone(),
+                    name: host.metadata["name"].as_str().unwrap_or(id).to_string(),
+                    preserve: false, relink: false,
+                });
+            }
+        }
+        let Records { hosts, keys, proxies } = local;
+        let mut conflicts = Vec::new();
+        let combined = Records {
+            hosts: merge_map(&previous.hosts, hosts, &cloud.hosts, "hosts", choices, &mut conflicts),
+            keys: merge_map(&previous.keys, keys, &cloud.keys, "keys", choices, &mut conflicts),
+            proxies: merge_map(&previous.proxies, proxies, &cloud.proxies, "proxies", choices, &mut conflicts),
+        };
+        if !conflicts.is_empty() {
+            return Ok(SyncResult {
+                conflict_snapshot: Some(conflict_snapshot(&device, &vault, &raw_local, &previous)?),
+                base: vault, expected_local: None, conflicts, blocked,
+            });
+        }
         validate_links(&combined)?;
+        let repairable = blocked.iter().any(|issue| issue.relink && !issue.preserve && {
+            let records = if issue.kind == "keys" { &combined.keys } else { &combined.hosts };
+            records.get(&issue.id).is_some_and(|record| record.private_key.is_some())
+        });
+        let expected_local = (previous != cloud || repairable)
+            .then(|| seal(&device, revision, &raw_local)).transpose()?;
         let base = if combined == cloud {
             vault
         } else {
@@ -536,7 +761,7 @@ pub(crate) async fn host_sync_exchange(
             request::<Value>(&device.server, Method::PUT, "vault", Some(&device.token), Some(json!({ "revision": revision, "vault": vault }))).await?;
             vault
         };
-        Ok(SyncResult { base, expected_local })
+        Ok(SyncResult { base, expected_local, conflict_snapshot: None, conflicts, blocked })
     }.await;
     result.map_err(|e: String| error("host_sync_exchange", e))
 }
@@ -544,6 +769,7 @@ pub(crate) async fn host_sync_exchange(
 #[tauri::command]
 pub(crate) fn host_sync_apply(
     account_id: String, vault: Vault, expected_local: Vault, configuration: Configuration,
+    preserve_hosts: Vec<String>, preserve_keys: Vec<String>,
 ) -> CommandResult<AppliedConfiguration> {
     (|| {
         let device = require_device(&account_id)?;
@@ -552,10 +778,10 @@ pub(crate) fn host_sync_apply(
             hosts: configuration.hosts.clone(),
             keys: configuration.keys.clone(),
             proxies: configuration.proxies.clone(),
-        })? {
+        }, &mut Vec::new())? {
             return Err("本机 SSH 凭据刚发生变化，将在下一次同步时重试".into());
         }
-        apply_records(records, configuration)
+        apply_records(records, configuration, &preserve_hosts, &preserve_keys)
     })().map_err(|e| error("host_sync_apply", e))
 }
 
@@ -575,11 +801,65 @@ mod tests {
     fn merges_remote_delete_and_detects_concurrent_edits() {
         let base = BTreeMap::from([host("original")]);
         let cloud = BTreeMap::new();
-        let removed = merge_map(&base, BTreeMap::from([host("original")]), &cloud, None).unwrap();
+        let mut conflicts = Vec::new();
+        let removed = merge_map(&base, BTreeMap::from([host("original")]), &cloud, "hosts", None, &mut conflicts);
         assert!(removed.is_empty());
-        assert!(merge_map(&base, BTreeMap::from([host("edited")]), &cloud, None).is_err());
-        let kept = merge_map(&base, BTreeMap::from([host("edited")]), &cloud, Some(true)).unwrap();
+        assert!(conflicts.is_empty());
+        merge_map(&base, BTreeMap::from([host("edited")]), &cloud, "hosts", None, &mut conflicts);
+        assert_eq!(conflicts[0].id, "hosts/host");
+        let choices = BTreeMap::from([("hosts/host".into(), true)]);
+        conflicts.clear();
+        let kept = merge_map(&base, BTreeMap::from([host("edited")]), &cloud, "hosts", Some(&choices), &mut conflicts);
         assert_eq!(kept["host"].metadata["name"], "edited");
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn resolves_conflicts_per_record() {
+        let version = |name: &str| {
+            let (_, mut other) = host(name);
+            other.metadata["id"] = json!("another");
+            BTreeMap::from([host(name), ("another".into(), other)])
+        };
+        let choices = BTreeMap::from([("hosts/host".into(), true), ("hosts/another".into(), false)]);
+        let mut conflicts = Vec::new();
+        let result = merge_map(
+            &version("base"), version("local"), &version("cloud"), "hosts",
+            Some(&choices), &mut conflicts,
+        );
+        assert!(conflicts.is_empty());
+        assert_eq!(result["host"].metadata["name"], "local");
+        assert_eq!(result["another"].metadata["name"], "cloud");
+    }
+
+    #[test]
+    fn missing_keys_defer_only_records_that_need_them() {
+        let (_, mut blocked_host) = host("blocked");
+        blocked_host.metadata["sshKeyId"] = json!("missing");
+        let broken_key = Record {
+            metadata: json!({"id": "missing", "name": "Missing key"}),
+            secret: None,
+            private_key: None,
+        };
+        let local = Records {
+            hosts: BTreeMap::from([host("healthy"), ("blocked".into(), blocked_host)]),
+            keys: BTreeMap::from([("missing".into(), broken_key)]),
+            ..Records::default()
+        };
+        let empty = Records::default();
+        let mut blocked = vec![BlockedRecord {
+            kind: "keys",
+            id: "missing".into(),
+            name: "Missing key".into(),
+            preserve: false,
+            relink: true,
+        }];
+        let prepared = prepare_capture(local, &empty, &empty, &mut blocked);
+        assert_eq!(prepared.hosts.len(), 1);
+        assert!(prepared.hosts.contains_key("host"));
+        assert!(prepared.keys.is_empty());
+        assert_eq!(blocked.len(), 2);
+        assert!(blocked.iter().all(|record| record.preserve));
     }
 
     #[test]
@@ -594,7 +874,12 @@ mod tests {
             key,
             wrapped_key: wrap_master_key(&key, &recovery, true).unwrap(),
         };
-        let vault = seal(&device, 17, &Records::default()).unwrap();
+        let empty = Records::default();
+        let vault = seal(&device, 17, &empty).unwrap();
+        let snapshot = conflict_snapshot(&device, &vault, &empty, &empty).unwrap();
+        assert!(verifies_conflict(&device, &vault, &empty, &empty, &snapshot).unwrap());
+        let advanced = seal(&device, 18, &empty).unwrap();
+        assert!(!verifies_conflict(&device, &advanced, &empty, &empty, &snapshot).unwrap());
         assert_eq!(open(&device, &vault).unwrap().0, 17);
         device.account_id = "second".into();
         assert!(open(&device, &vault).is_err());

@@ -8,6 +8,7 @@ import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 
 const HOME_TAB_ID = "home";
 type SplitDirection = "columns" | "rows";
+const splitPreferenceKey = "fineshell.terminal.splitDirection";
 
 interface SessionTabsProps {
   activeSessionId: string | null;
@@ -48,13 +49,20 @@ function SessionTabs({
   sessionContextMenuItems,
   sessions,
 }: SessionTabsProps) {
-  const [split, setSplit] = useState<{
+  const [preferredDirection, setPreferredDirection] = useState<SplitDirection | undefined>(() => {
+    const saved = localStorage.getItem(splitPreferenceKey);
+    return saved === "rows" || saved === "columns" ? saved : undefined;
+  });
+  const [selectedPair, setSplit] = useState<{
     first: string;
     second: string;
     direction: SplitDirection;
   }>();
   const sessionIds = sessions.map(({ id }) => id);
-  const companion = split && sessionIds.find((id) => id !== activeSessionId);
+  const companion = sessionIds.find((id) => id !== activeSessionId);
+  const split = selectedPair ?? (preferredDirection && activeSessionId && companion
+    ? { first: activeSessionId, second: companion, direction: preferredDirection }
+    : undefined);
   const visiblePair = split && activeSessionId && companion
     ? [split.first, split.second].includes(activeSessionId)
       && sessionIds.includes(split.first) && sessionIds.includes(split.second)
@@ -78,12 +86,17 @@ function SessionTabs({
   function changeSplit(mode: string) {
     if (mode === "single") {
       setSplit(undefined);
+      setPreferredDirection(undefined);
+      localStorage.removeItem(splitPreferenceKey);
       return;
     }
     const other = sessions.find(({ id }) => id !== activeSessionId);
     if (activeSessionId && other) {
       const [first, second] = visiblePair ?? [activeSessionId, other.id];
-      setSplit({ first, second, direction: mode === "rows" ? "rows" : "columns" });
+      const direction = mode === "rows" ? "rows" : "columns";
+      setSplit({ first, second, direction });
+      setPreferredDirection(direction);
+      localStorage.setItem(splitPreferenceKey, direction);
     }
   }
   return (
