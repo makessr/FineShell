@@ -21,6 +21,7 @@ import {
   IconPaste,
   IconRefresh,
   IconRight,
+  IconSearch,
   IconStar,
   IconStarFill,
   IconUpload,
@@ -38,6 +39,7 @@ interface SftpToolbarProps {
   inputPath: string;
   aiFileReadProgress?: { completed: number; total: number };
   loading: boolean;
+  nameFilterOpen: boolean;
   operationLoading: boolean;
   pathSuggestions: string[];
   ready: boolean;
@@ -51,6 +53,7 @@ interface SftpToolbarProps {
   onRefresh: () => void;
   onRemoveBookmark: (path: string) => void;
   onToggleBookmark: () => void;
+  onToggleNameFilter: () => void;
   onUpload: () => void;
   onUp: () => void;
 }
@@ -65,6 +68,7 @@ export default function SftpToolbar({
   inputPath,
   aiFileReadProgress,
   loading,
+  nameFilterOpen,
   operationLoading,
   pathSuggestions,
   ready,
@@ -78,6 +82,7 @@ export default function SftpToolbar({
   onRefresh,
   onRemoveBookmark,
   onToggleBookmark,
+  onToggleNameFilter,
   onUpload,
   onUp,
 }: SftpToolbarProps) {
@@ -274,6 +279,17 @@ export default function SftpToolbar({
         </span>
       )}
       <Space size="mini">
+        <Tooltip content="按文件名筛选当前目录">
+          <Button
+            aria-label="筛选文件名"
+            aria-pressed={nameFilterOpen}
+            disabled={!ready}
+            icon={<IconSearch />}
+            onClick={onToggleNameFilter}
+            size="mini"
+            type={nameFilterOpen ? "primary" : "default"}
+          />
+        </Tooltip>
         <Dropdown.Button
           buttonProps={{ icon: <IconFolderAdd /> }}
           disabled={!ready}

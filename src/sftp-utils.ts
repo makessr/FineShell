@@ -1,3 +1,18 @@
+export function filterSftpEntries<T extends { name: string }>(
+  entries: T[],
+  showHiddenFiles: boolean,
+  query: string,
+) {
+  const keyword = query.trim().toLowerCase();
+  if (showHiddenFiles && !keyword) return entries;
+
+  return entries.filter(
+    ({ name }) =>
+      (showHiddenFiles || !name.startsWith(".")) &&
+      (!keyword || name.toLowerCase().includes(keyword)),
+  );
+}
+
 export function remoteParentPath(path: string) {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
   if (normalized === "/") return "/";

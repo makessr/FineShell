@@ -2,6 +2,15 @@
   gap: 10px;
 }
 
+.sftp-name-filter {
+  flex: none;
+  padding: 4px 8px;
+}
+
+.sftp-name-filter .arco-input-wrapper {
+  max-width: 360px;
+}
+
 .sftp-ai-read-progress {
   flex: none;
   color: var(--color-text-3);

@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Empty,
+  Input,
   Message,
   Modal,
   Table,
@@ -41,6 +42,7 @@ import {
   type AiRemoteFileContext,
 } from "../ai-utils";
 import {
+  filterSftpEntries,
   formatFileSize,
   formatPermissions,
   formatRemoteTime,
@@ -178,6 +180,7 @@ function SftpPanel({
   }>();
   const [retryingSessionId, setRetryingSessionId] = useState<string>();
   const [selectedEntryKeys, setSelectedEntryKeys] = useState<string[]>([]);
+  const [nameFilter, setNameFilter] = useState<string | null>(null);
   const connectingRef = useRef(new Set<string>());
   const connectedHomesRef = useRef(new Map<string, string>());
   const handledRefreshRequestsRef = useRef<Record<string, number>>({});
@@ -518,12 +521,13 @@ function SftpPanel({
     currentTransfers.length + currentExternalEdits.length;
   const visibleEntries = useMemo(
     () =>
-      (browser?.entries ?? []).filter(
-        (entry) => showHiddenFiles || !entry.name.startsWith("."),
-      ),
-    [browser?.entries, showHiddenFiles],
+      filterSftpEntries(browser?.entries ?? [], showHiddenFiles, nameFilter ?? ""),
+    [browser?.entries, nameFilter, showHiddenFiles],
   );
   const virtualized = ready && visibleEntries.length >= SFTP_VIRTUAL_ROW_THRESHOLD;
+  const emptyDirectoryMessage = nameFilter?.trim()
+    ? "没有匹配的文件或目录"
+    : "目录为空";
 
   useLayoutEffect(() => {
     if (!virtualized) return;
@@ -580,6 +584,7 @@ function SftpPanel({
 
   useEffect(() => {
     setSelectedEntryKeys([]);
+    setNameFilter(null);
   }, [browser?.path, session?.id]);
 
   useEffect(() => {
@@ -656,6 +661,7 @@ function SftpPanel({
   function locateTransferInPanel(transfer: TransferActivityRecord) {
     if (!session || !transfer.remotePath) return;
     pendingLocatePathRef.current = transfer.remotePath;
+    setNameFilter(null);
     setTransferDrawerVisible(false);
     void loadDirectory(session.id, remoteParentPath(transfer.remotePath));
   }
@@ -1062,6 +1068,7 @@ function SftpPanel({
         history={currentLocation.history}
         inputPath={browser?.inputPath ?? "/"}
         loading={browser?.status === "loading"}
+        nameFilterOpen={nameFilter !== null}
         onClearHistory={clearPathHistory}
         onCreate={openCreateDialog}
         onInputPathChange={(value) =>
@@ -1081,6 +1088,9 @@ function SftpPanel({
         }}
         onRemoveBookmark={removePathBookmark}
         onToggleBookmark={toggleCurrentPathBookmark}
+        onToggleNameFilter={() =>
+          setNameFilter((current) => (current === null ? "" : null))
+        }
         onUp={() => {
           if (session && browser) {
             void loadDirectory(session.id, remoteParentPath(browser.path));
@@ -1092,6 +1102,26 @@ function SftpPanel({
         ready={ready}
         transferActivityCount={transferActivityCount}
       />
+
+      {nameFilter !== null && (
+        <div className="sftp-name-filter">
+          <Input
+            allowClear
+            aria-label="当前目录文件名"
+            autoFocus
+            onChange={setNameFilter}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setNameFilter(null);
+                panelRef.current?.focus({ preventScroll: true });
+              }
+            }}
+            placeholder="筛选当前目录"
+            size="small"
+            value={nameFilter}
+          />
+        </div>
+      )}
 
       <>
         <ContextMenu
@@ -1120,7 +1150,9 @@ function SftpPanel({
               data={ready ? visibleEntries : []}
               loading={Boolean(connected && busy)}
               noDataElement={
-                <Empty description={ready ? "目录为空" : "暂无文件"} />
+                <Empty
+                  description={ready ? emptyDirectoryMessage : "暂无文件"}
+                />
               }
               onRow={(entry) => ({
                 "data-sftp-entry-id": entry.id,
