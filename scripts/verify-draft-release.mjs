@@ -5,11 +5,12 @@ import { createReadStream } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-const [assetDir, releaseFile, previousConfig, verifier, repository, tag, commit] = process.argv.slice(2);
+const [assetDir, releaseFile, previousConfig, verifier, repository, tag, commit, visibility = "draft"] = process.argv.slice(2);
+assert.ok(["draft", "published"].includes(visibility));
 const release = JSON.parse(await readFile(releaseFile, "utf8"));
 assert.equal(release.tag_name, tag);
 assert.equal(release.target_commitish, commit);
-assert.equal(release.draft, true);
+assert.equal(release.draft, visibility === "draft");
 assert.equal(release.prerelease, false);
 
 const version = release.tag_name.slice(1);
@@ -56,6 +57,11 @@ for (const name of signedPackages) {
 }
 
 const manifestBytes = await readFile(join(assetDir, "latest.json"));
+if (visibility === "published") {
+  const latest = await fetch(endpoints[0], { signal: AbortSignal.timeout(20_000) });
+  assert.ok(latest.ok, `Published update manifest returned HTTP ${latest.status}`);
+  assert.deepEqual(Buffer.from(await latest.arrayBuffer()), manifestBytes);
+}
 const manifest = JSON.parse(manifestBytes.toString("utf8"));
 assert.equal(manifest.version, version);
 assert.deepEqual(Object.keys(manifest.platforms).sort(), Object.keys(platformPackages).sort());
@@ -65,4 +71,4 @@ for (const [platform, suffix] of Object.entries(platformPackages)) {
   assert.equal(url, `https://github.com/${repository}/releases/download/${release.tag_name}/${name}`);
   assert.equal(signature, (await readFile(join(assetDir, name + ".sig"), "utf8")).trim());
 }
-console.log(`Verified ${expectedAssets.length} draft asset digests, ${signedPackages.length} signatures, and ${Object.keys(platformPackages).length} updater entries for ${repository} ${release.tag_name}.`);
+console.log(`Verified ${expectedAssets.length} ${visibility} asset digests, ${signedPackages.length} signatures, and ${Object.keys(platformPackages).length} updater entries for ${repository} ${release.tag_name}.`);

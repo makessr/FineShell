@@ -1,15 +1,15 @@
-name: Verify v0.6.1 and v0.6.2 migration drafts
+name: Verify the public ZhanDu channel migration
 
 on:
   push:
-    branches: [test/verify-migration-drafts, test/run-migration-ota]
+    branches: [test/public-migration-ota]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit:
-    if: github.ref == 'refs/heads/test/verify-migration-drafts' && (github.repository == 'makessr/FineShell' || github.repository == 'makessr/ZhanDu')
+    if: github.repository == 'makessr/FineShell' || github.repository == 'makessr/ZhanDu'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -24,22 +24,36 @@ jobs:
         with:
           node-version: "26"
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify each draft asset and updater signature in the source repository
+      - name: Verify the public release, updater manifest and signatures
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/src-tauri/tauri.conf.json?ref=$SIGNER_SHA" --jq '.content' | base64 -d > "$RUNNER_TEMP/signer.json"
-          id="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$id" > "$RUNNER_TEMP/release.json"
-          jq -e --arg tag "$TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha' "$RUNNER_TEMP/release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/release.json"
+          jq -e --arg tag "$TAG" --arg sha "$RELEASE_SHA" '(.draft == false) and .tag_name == $tag and .target_commitish == $sha' "$RUNNER_TEMP/release.json"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets"
           cargo build --locked --manifest-path scripts/verify-release-signature/Cargo.toml --target-dir "$RUNNER_TEMP/verifier"
-          node scripts/verify-draft-release.mjs "$RUNNER_TEMP/assets" "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/signer.json" "$RUNNER_TEMP/verifier/debug/verify-release-signature" "$GITHUB_REPOSITORY" "$TAG" "$RELEASE_SHA"
+          node scripts/verify-draft-release.mjs "$RUNNER_TEMP/assets" "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/signer.json" "$RUNNER_TEMP/verifier/debug/verify-release-signature" "$GITHUB_REPOSITORY" "$TAG" "$RELEASE_SHA" published
 
   windows-ota:
-    if: github.repository == 'makessr/FineShell' && github.ref == 'refs/heads/test/run-migration-ota'
-    runs-on: windows-latest
+    if: github.repository == 'makessr/FineShell'
+    name: Windows ${{ matrix.arch }} public two-hop OTA
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            digest: d777321cd568c07036e19492dd5aec5b10efa7f45b298bfe076d961dbc2424f1
+          - arch: arm64
+            runner: windows-11-arm
+            digest: 939c67f39b75bf43a07d5242469bc7fb3f620426717792bad45a4c06c2cf75df
+    env:
+      WINDOWS_ARCH: ${{ matrix.arch }}
+      BASELINE_SHA256: ${{ matrix.digest }}
+      FINESHELL_OTA_PUBLIC_BRIDGE: '0.6.1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,7 +61,21 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "26"
-      - name: Install the two signed draft updates in an isolated Windows environment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/windows-smoke/test-migration-drafts.ps1
+          architecture: ${{ matrix.arch }}
+      - name: Download the official v0.6.0 baseline and check both public channels
+        run: |
+          if ($env:RUNNER_ARCH -ne $env:WINDOWS_ARCH) { throw 'Runner architecture differs from installer architecture.' }
+          $oldFeed = Invoke-RestMethod 'https://github.com/makessr/FineShell/releases/latest/download/latest.json' -TimeoutSec 20
+          $newFeed = Invoke-RestMethod 'https://github.com/makessr/ZhanDu/releases/latest/download/latest.json' -TimeoutSec 20
+          if ($oldFeed.version -ne '0.6.1' -or $newFeed.version -ne '0.6.2') { throw 'The expected public update sequence is unavailable.' }
+          $file = Join-Path $env:RUNNER_TEMP 'FineShell-v0.6.0.exe'
+          $url = "https://github.com/makessr/FineShell/releases/download/v0.6.0/FineShell_0.6.0_windows_$env:WINDOWS_ARCH-setup.exe"
+          curl.exe --silent --show-error --fail --location --retry 3 --output $file $url
+          if ($LASTEXITCODE -or (Get-FileHash -LiteralPath $file).Hash -ne $env:BASELINE_SHA256) { throw 'The baseline installer did not match the official asset.' }
+      - name: Upgrade twice through GitHub Direct and reconnect to saved hosts
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/fixture" --ignore-scripts --no-audit --no-fund ssh2@1.17.0
+          if ($LASTEXITCODE) { throw 'Could not install the loopback SSH fixture.' }
+          $baseline = Join-Path $env:RUNNER_TEMP 'FineShell-v0.6.0.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'fixture/node_modules/ssh2/lib/index.js'
+          ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $baseline -Baseline 0.6.0 -Target 0.6.2 -Ssh2Module $fixture -UseHostedRunnerWebView2Policy -RequireArm64:($env:WINDOWS_ARCH -eq 'arm64')
