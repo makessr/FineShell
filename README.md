@@ -112,7 +112,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
-**仓库版本** v0.4.1。各版本变动见 [更新日志](CHANGELOG.md)。
+**仓库版本** v0.5.0。各版本变动见 [更新日志](CHANGELOG.md)。
 
 可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载已发布的 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
 
