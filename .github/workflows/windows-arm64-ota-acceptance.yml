@@ -1,0 +1,44 @@
+name: Windows ARM64 v0.5.1 OTA acceptance
+on:
+  push:
+    branches: [test/windows-arm64-ota-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: windows-11-arm
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+          architecture: arm64
+      - name: Verify the official channel and the ARM64 baseline installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:RUNNER_ARCH -ne 'ARM64' -or
+              [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
+            throw 'This job must run on Windows ARM64.'
+          }
+          $latest = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if ($LASTEXITCODE -or $latest -ne 'v0.5.1') { throw 'Expected v0.5.1 on the official channel.' }
+          $name = 'FineShell_0.5.0_windows_arm64-setup.exe'
+          gh release download v0.5.0 --repo $env:GITHUB_REPOSITORY --pattern $name --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE) { throw 'Could not download the baseline installer.' }
+          $installer = Join-Path $env:RUNNER_TEMP $name
+          $expected = '404FFC43FAAC3319961BF1B0A966D5E154AB6CB1B09266B6AD3148A866C432CD'
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expected) {
+            throw 'The baseline installer digest differs from the official release asset.'
+          }
+      - name: Install and upgrade the native ARM64 client
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'FineShell_0.5.0_windows_arm64-setup.exe'
+          ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $installer -Baseline 0.5.0 -Target 0.5.1 -RequireArm64 -UseHostedRunnerWebView2Policy

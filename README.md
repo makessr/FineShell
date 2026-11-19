@@ -249,6 +249,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ## Windows 发布验收
 
+Windows ARM64 验收从正式 NSIS 安装包开始，在独立的 Windows 11 ARM64 运行器上检查安装和应用内更新。验收同时核对升级前后的客户端架构和 WebView2 测试数据。
+
 从 v0.5.1 起，Windows 版支持只启用现代椭圆曲线密钥交换的 SSH 服务器。桌面验收使用 Curve25519 握手覆盖该场景。
 
 待发布的 SFTP 大目录预览会分批显示最先读取的项目，最多预览 1,024 项。读取完成后显示完整目录，可全选、拖拽和执行文件操作。
