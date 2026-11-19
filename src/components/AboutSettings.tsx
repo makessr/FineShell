@@ -34,6 +34,7 @@ import {
   applicationUpdateOptionsFromSettings,
 } from "../app-updater";
 import type { AppSettings } from "../app-settings";
+import { APP_DISPLAY_NAME } from "../application-brand";
 import ReleaseNotesMarkdown from "./ReleaseNotesMarkdown";
 
 type UpdateStatus =
@@ -249,7 +250,7 @@ function AboutSettings({
       onOk: () => {
         void downloadAndInstall(update);
       },
-      title: `安装 FineShell ${update.version}？`,
+      title: `安装 ${APP_DISPLAY_NAME} ${update.version}？`,
     });
   };
 
@@ -287,10 +288,10 @@ function AboutSettings({
       <Typography.Title heading={5}>关于</Typography.Title>
 
       <div className="about-product">
-        <img alt="FineShell" className="about-product-logo" src="/app-icon.png" />
+        <img alt={APP_DISPLAY_NAME} className="about-product-logo" src="/app-icon.png" />
         <div className="about-product-copy">
           <Typography.Title heading={4}>
-            {applicationInfo?.name ?? "FineShell"}
+            {applicationInfo?.name ?? APP_DISPLAY_NAME}
           </Typography.Title>
           <Typography.Text type="secondary">
             跨平台 SSH 与 SFTP 客户端
@@ -464,7 +465,7 @@ function AboutSettings({
         )}
 
         {status === "restarting" && (
-          <Alert content="更新已安装，正在重新启动 FineShell…" type="success" />
+          <Alert content={`更新已安装，正在重新启动 ${APP_DISPLAY_NAME}…`} type="success" />
         )}
 
         {status === "error" && (

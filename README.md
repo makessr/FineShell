@@ -1,7 +1,7 @@
-# FineShell
+# 栈渡（ZhanDu）
 
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="112" alt="FineShell logo" />
+  <img src="src-tauri/icons/128x128.png" width="112" alt="栈渡标志" />
 </p>
 
 <p align="center">
@@ -9,8 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/makessr/FineShell/actions/workflows/ci.yml"><img src="https://github.com/makessr/FineShell/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/makessr/FineShell/releases"><img src="https://img.shields.io/github/v/release/makessr/FineShell?display_name=tag&sort=semver" alt="GitHub release" /></a>
+  <a href="https://github.com/makessr/FineShell/releases"><img src="https://img.shields.io/github/v/release/makessr/FineShell?display_name=tag&sort=semver" alt="FineShell 已发布版本" /></a>
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827" alt="React 18" />
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust" alt="Rust stable" />
@@ -19,7 +18,9 @@
 
 ![FineShell 工作区：服务器监控、终端与 SFTP 文件管理](docs/screenshots/terminal.png)
 
-本仓库是 [Max0897/FineShell](https://github.com/Max0897/FineShell) 的 fork，维护自己的 Windows 安装包、更新渠道和主机账号同步服务。
+栈渡由 makessr 独立维护，提供 Windows、macOS 和 Linux 客户端、独立更新渠道和主机账号同步服务。
+
+栈渡源自 Max0897 开发的 FineShell 项目，沿用 Apache-2.0 许可证。 [原作者 Max0897](https://github.com/Max0897) · [原项目 FineShell](https://github.com/Max0897/FineShell) · [许可证](LICENSE)
 
 ## 核心能力
 
@@ -77,7 +78,7 @@ SSH 工作区可保存当前窗口的已保存主机会话及分屏布局，之�
 
 ### AI 运维助手
 
-FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务器状态、终端输出和远程文件理解问题，通过受控工具完成信息采集，并在执行终端命令或修改文件前按照当前审批模式处理授权。
+栈渡将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务器状态、终端输出和远程文件理解问题，通过受控工具完成信息采集，并在执行终端命令或修改文件前按照当前审批模式处理授权。
 
 ![FineShell AI 运维助手在 SSH 工作区展示演示主机的诊断回复](docs/screenshots/ai-assistant.png)
 
@@ -96,7 +97,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 1. AI 根据问题和显式添加的上下文拆解任务。
 2. 通过已授权的只读工具采集服务器证据，并持续更新执行状态。
 3. 需要执行命令或变更文件时，在输入框上方展示审批卡片。
-4. 用户可以选择同意、拒绝或补充说明；通过审批后，FineShell 才会在当前连接中执行操作。
+4. 用户可以选择同意、拒绝或补充说明。通过审批后，栈渡才会在当前连接中执行操作。
 5. 后端记录命令退出状态、文件校验和业务验证结果，再由 AI 根据真实结果继续处理或给出结论。
 
 #### 审批模式
@@ -116,11 +117,15 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
-**仓库版本** v0.5.1。各版本变动见 [更新日志](CHANGELOG.md)。
+**仓库版本** v0.6.0。各版本变动见 [更新日志](CHANGELOG.md)。
 
-在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 查看对应版本的安装包。应用通过本仓库发布的更新清单检查更新。
+新版客户端使用「栈渡」名称和海军蓝终端图标。为衔接旧版升级，过渡安装包沿用 FineShell 的安装器名称、更新渠道和应用标识。
 
-| v0.5.0 发布目标 | 安装包 |
+栈渡源码在独立仓库维护。现有 FineShell 客户端的安装包与应用内更新仍由原发行仓库提供。 [栈渡源码](https://github.com/makessr/ZhanDu) · [已发布安装包](https://github.com/makessr/FineShell/releases)
+
+v0.6.0 是首个采用栈渡品牌的签名过渡版本。正式发布后，FineShell v0.5.1 可从原发行渠道检查并安装更新。请以 Releases 页面显示的版本为准。 [更新渠道迁移说明](docs/release-pipeline.md#从-fineshell-过渡到栈渡)
+
+| 发布目标 | 安装包 |
 | --- | --- |
 | Windows x64 | `.exe`（NSIS）、`.msi` |
 | Windows ARM64 | `.exe`（NSIS） |
@@ -129,7 +134,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 从 v0.2.0 升级到 v0.3.0 时，请退出 FineShell，下载与当前架构和安装方式一致的安装包，再覆盖安装。v0.2.0 和 v0.3.0 的应用内更新会拒绝本仓库的下载地址。
 
-v0.5.0 公开前，macOS 和 Linux 可从本仓库源码构建。macOS 下载包的签名和公证状态以发布说明为准。
+macOS 发布包使用临时签名，Apple Developer ID 签名和公证状态以发布说明为准。
 
 ### Linux 安装
 
@@ -137,7 +142,7 @@ v0.5.0 公开前，macOS 和 Linux 可从本仓库源码构建。macOS 下载包
 
 ```bash
 sudo apt update
-sudo apt install ./FineShell_0.5.0_linux_arm64.deb
+sudo apt install ./FineShell_0.6.0_linux_arm64.deb
 ```
 
 请根据实际下载的文件名调整命令。不要直接使用 `dpkg -i`，因为 `dpkg` 不会自动下载缺失的依赖。
@@ -159,8 +164,8 @@ sudo apt --fix-broken install
 ### 启动开发环境
 
 ```bash
-git clone https://github.com/makessr/FineShell.git
-cd FineShell
+git clone https://github.com/makessr/ZhanDu.git
+cd ZhanDu
 bun install --frozen-lockfile
 bun run tauri dev
 ```
@@ -261,14 +266,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 GitHub 仓库需要配置 Tauri 更新签名私钥 `TAURI_SIGNING_PRIVATE_KEY`。完整架构与失败重试方式见 [发布流水线文档](docs/release-pipeline.md)。
 
-## 支持项目
-
-如果 FineShell 对你有帮助，可以通过反馈问题、完善文档、贡献代码、分享项目或自愿打赏来支持它。打赏不会影响功能开放、Issue 处理或贡献者权益。
-
-<p align="center">
-  <img src="docs/donate/wechat-pay.jpg" width="220" alt="微信支付收款码" />
-</p>
-
 ## 开源许可
 
-FineShell 使用 [Apache License 2.0](LICENSE) 开源。你可以自由使用、修改和分发本项目，但需要保留许可证及相关版权声明。
+栈渡以 Apache License 2.0 开源。你可以使用、修改和分发本项目，并需保留许可证及相关版权声明。 [许可证](LICENSE)

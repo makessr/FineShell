@@ -19,6 +19,7 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { AppSettings } from "../app-settings";
+import { APP_DISPLAY_NAME } from "../application-brand";
 import { diagnosticInvoke as invoke } from "../diagnostics";
 import {
   type ConfigurationBackup,
@@ -155,8 +156,8 @@ function ConfigurationMaintenance({
     try {
       const path = await saveDialog({
         defaultPath: `fineshell-config-${new Date().toISOString().slice(0, 10)}.json`,
-        filters: [{ name: "FineShell 配置", extensions: ["json"] }],
-        title: "导出 FineShell 配置",
+        filters: [{ name: `${APP_DISPLAY_NAME}配置`, extensions: ["json"] }],
+        title: `导出${APP_DISPLAY_NAME}配置`,
       });
       if (!path) return;
 
@@ -183,9 +184,9 @@ function ConfigurationMaintenance({
     try {
       const path = await open({
         directory: false,
-        filters: [{ name: "FineShell 配置", extensions: ["json"] }],
+        filters: [{ name: `${APP_DISPLAY_NAME}配置`, extensions: ["json"] }],
         multiple: false,
-        title: "导入 FineShell 配置",
+        title: `导入${APP_DISPLAY_NAME}配置`,
       });
       if (typeof path !== "string") return;
 

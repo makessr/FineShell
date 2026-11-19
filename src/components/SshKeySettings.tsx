@@ -22,6 +22,7 @@ import {
 } from "@arco-design/web-react/icon";
 import { isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { APP_DISPLAY_NAME } from "../application-brand";
 import { diagnosticInvoke as invoke } from "../diagnostics";
 import {
   loadConfiguration,
@@ -172,7 +173,7 @@ function SshKeyEditorModal({
           </Form.Item>
         ) : sshKey ? (
           <Form.Item label="私钥">
-            <Input disabled value="FineShell 托管密钥" />
+            <Input disabled value={`${APP_DISPLAY_NAME}托管密钥`} />
           </Form.Item>
         ) : (
           <Form.Item
@@ -381,7 +382,7 @@ function SshKeySettings() {
             <Typography.Text bold>{sshKey.name}</Typography.Text>
             <Typography.Text type="secondary">
               {getSshKeySource(sshKey) === "managed"
-                ? "FineShell 托管"
+                ? `${APP_DISPLAY_NAME}托管`
                 : sshKey.privateKeyPath}
             </Typography.Text>
           </div>

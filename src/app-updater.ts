@@ -1,9 +1,10 @@
 import packageMetadata from "../package.json";
-import { getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
+import { getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { Channel, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { APP_DISPLAY_NAME } from "./application-brand";
 import type { AppSettings, GithubMirrorRoute } from "./app-settings";
 import { loadConfiguration } from "./config-database";
 import { invokeProtocolCommand } from "./tauri-protocol";
@@ -183,17 +184,16 @@ function applicationUpdateFromMetadata(
 async function getApplicationInfo(): Promise<ApplicationInfo> {
   if (!isTauri()) {
     return {
-      name: "FineShell",
+      name: APP_DISPLAY_NAME,
       version: packageMetadata.version,
     };
   }
 
-  const [name, version, tauriVersion] = await Promise.all([
-    getName(),
+  const [version, tauriVersion] = await Promise.all([
     getVersion(),
     getTauriVersion(),
   ]);
-  return { name, version, tauriVersion };
+  return { name: APP_DISPLAY_NAME, version, tauriVersion };
 }
 
 const mockApplicationUpdateEnabled =

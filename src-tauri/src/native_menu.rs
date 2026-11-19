@@ -96,7 +96,7 @@ fn show_auxiliary_window<R: Runtime>(
 
     #[cfg(target_os = "windows")]
     {
-        Err(format!("预加载窗口 {label} 不存在，请重启 FineShell"))
+        Err(format!("预加载窗口 {label} 不存在，请重启栈渡"))
     }
 }
 
@@ -299,7 +299,7 @@ pub fn build_chinese_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<
     let package = app.package_info();
     let config = app.config();
     let about_metadata = AboutMetadata {
-        name: Some("FineShell".to_string()),
+        name: Some("栈渡".to_string()),
         version: Some(package.version.to_string()),
         copyright: config.bundle.copyright.clone(),
         authors: config
@@ -340,7 +340,7 @@ pub fn build_chinese_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(not(target_os = "macos"))]
-            &PredefinedMenuItem::about(app, Some("关于 FineShell"), Some(about_metadata.clone()))?,
+            &PredefinedMenuItem::about(app, Some("关于栈渡"), Some(about_metadata.clone()))?,
         ],
     )?;
 
@@ -350,12 +350,12 @@ pub fn build_chinese_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<
             #[cfg(target_os = "macos")]
             &Submenu::with_items(
                 app,
-                "FineShell",
+                "栈渡",
                 true,
                 &[
                     &PredefinedMenuItem::about(
                         app,
-                        Some("关于 FineShell"),
+                        Some("关于栈渡"),
                         Some(about_metadata.clone()),
                     )?,
                     &PredefinedMenuItem::separator(app)?,
@@ -363,11 +363,11 @@ pub fn build_chinese_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::services(app, Some("服务"))?,
                     &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::hide(app, Some("隐藏 FineShell"))?,
+                    &PredefinedMenuItem::hide(app, Some("隐藏栈渡"))?,
                     &PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?,
                     &PredefinedMenuItem::show_all(app, Some("全部显示"))?,
                     &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, Some("退出 FineShell"))?,
+                    &PredefinedMenuItem::quit(app, Some("退出栈渡"))?,
                 ],
             )?,
             #[cfg(not(any(
@@ -384,7 +384,7 @@ pub fn build_chinese_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<
                 &[
                     &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
                     #[cfg(not(target_os = "macos"))]
-                    &PredefinedMenuItem::quit(app, Some("退出 FineShell"))?,
+                    &PredefinedMenuItem::quit(app, Some("退出栈渡"))?,
                 ],
             )?,
             &Submenu::with_items(

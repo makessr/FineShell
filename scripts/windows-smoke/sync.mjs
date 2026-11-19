@@ -91,6 +91,10 @@ async function readKey(view, text) {
 try {
   const a = await findWindow(portA, "main");
   const b = await findWindow(portB, "main");
+  await until("ZhanDu desktop branding", () => evaluate(a, () =>
+    document.title === "栈渡" &&
+    document.querySelector(".application-titlebar-brand")?.innerText.trim() === "栈渡"));
+  console.log("桌面标题栏已显示栈渡。");
   for (const view of [a, b]) {
     assert.equal(await invoke(view, "host_sync_account"), null, "Use two fresh isolated test profiles");
     const initial = await until("Initialized desktop configuration", () => evaluate(view, configuration));
