@@ -3,11 +3,15 @@ param(
     [Parameter(Mandatory)][string]$VerifiedInstaller,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Baseline,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Target,
-    [string]$Node = 'node.exe'
+    [string]$Node = 'node.exe',
+    [switch]$UseHostedRunnerWebView2Policy
 )
 
 $ErrorActionPreference = 'Stop'
 if ([version]$Baseline -ge [version]$Target) { throw 'The target must be newer than the baseline.' }
+if ($UseHostedRunnerWebView2Policy -and $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+    throw 'The machine WebView2 policy is only for a disposable GitHub-hosted runner.'
+}
 
 $uninstallRoots = @(
     'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall'
@@ -52,8 +56,19 @@ $oldFlags = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
 $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $workspace 'WebView2'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port --remote-debugging-address=127.0.0.1"
 $marker = [guid]::NewGuid().ToString('N')
+$policyPath = 'HKLM:/Software/Policies/Microsoft/Edge/WebView2/AdditionalBrowserArguments'
+$policyName = 'fineshell.exe'
+$policyAdded = $false
 
 try {
+    if ($UseHostedRunnerWebView2Policy) {
+        if (!(Test-Path -LiteralPath $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+        if ($null -ne (Get-ItemPropertyValue -LiteralPath $policyPath -Name $policyName -ErrorAction SilentlyContinue)) {
+            throw 'FineShell already has a machine WebView2 policy.'
+        }
+        New-ItemProperty -LiteralPath $policyPath -Name $policyName -Value $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -PropertyType String | Out-Null
+        $policyAdded = $true
+    }
     $setup = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$install" -WindowStyle Hidden -Wait -PassThru
     if ($setup.ExitCode -ne 0 -or (Get-TestVersion) -ne $Baseline) { throw 'The baseline installation failed.' }
     $app = Start-TestApp
@@ -95,6 +110,7 @@ try {
     & $Node (Join-Path $PSScriptRoot 'ota.mjs') verify $port $Baseline $Target $marker
     if ($LASTEXITCODE) { throw 'The upgraded application failed runtime verification.' }
 } finally {
+    if ($policyAdded) { Remove-ItemProperty -LiteralPath $policyPath -Name $policyName }
     Close-TestProcess
     $uninstaller = Join-Path $install 'uninstall.exe'
     if (Test-Path -LiteralPath $uninstaller) {

@@ -249,7 +249,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ## Windows 发布验收
 
-临时 Windows x64 验收工作流使用独立 GitHub 运行器，从 v0.5.0 测试升级到 v0.5.1，并在失败时检查隔离的 WebView2 配置和调试端口。
+临时 Windows x64 验收工作流使用独立 GitHub 运行器，从 v0.5.0 测试升级到 v0.5.1。运行器通过临时的 FineShell 专用策略启用 WebView2 回环调试端口，测试结束后移除该策略。
 
 从 v0.5.1 起，Windows 版支持只启用现代椭圆曲线密钥交换的 SSH 服务器。桌面验收使用 Curve25519 握手覆盖该场景。
 
