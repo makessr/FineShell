@@ -28,6 +28,8 @@ jobs:
             throw 'The baseline installer digest differs from the verified release asset.'
           }
       - name: Upgrade with the built-in updater
+        env:
+          RUST_BACKTRACE: "1"
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'FineShell_0.5.0_windows_x64-setup.exe'
           ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $installer -Baseline 0.5.0 -Target 0.5.1

@@ -67,7 +67,10 @@ try {
             Write-Host 'FineShell is still running.'
         }
         Get-Content -LiteralPath (Join-Path $workspace 'app-stderr.log') -Tail 30 | Write-Host
-        Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Id,SessionId,MainWindowHandle | Format-Table | Out-Host
+        Write-Host "FineShell window: $($app.MainWindowHandle), isolated WebView2 profile: $(Test-Path -LiteralPath $env:WEBVIEW2_USER_DATA_FOLDER)"
+        Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" |
+            Select-Object ProcessId,ParentProcessId,@{Name='UsesTestProfile';Expression={$_.CommandLine.Contains($workspace)}},@{Name='HasDebugPort';Expression={$_.CommandLine.Contains("--remote-debugging-port=$port")}} |
+            Format-Table | Out-Host
         throw 'Could not activate the built-in updater.'
     }
 
