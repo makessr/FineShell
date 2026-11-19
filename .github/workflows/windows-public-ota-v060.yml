@@ -8,6 +8,30 @@ permissions:
   contents: read
 
 jobs:
+  verify-release:
+    if: github.repository == 'makessr/FineShell'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Download all public assets and verify hashes, signatures and updater manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --depth=1 origin tag v0.5.1
+          git show v0.5.1:src-tauri/tauri.conf.json > "$RUNNER_TEMP/previous-tauri.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.6.0" > "$RUNNER_TEMP/release.json"
+          gh release download v0.6.0 --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets"
+          cargo build --locked --manifest-path scripts/verify-release-signature/Cargo.toml --target-dir "$RUNNER_TEMP/verifier"
+          node scripts/verify-published-release.mjs "$RUNNER_TEMP/assets" "$RUNNER_TEMP/release.json" \
+            "$RUNNER_TEMP/previous-tauri.json" "$RUNNER_TEMP/verifier/debug/verify-release-signature"
+
   upgrade:
     name: Windows ${{ matrix.arch }} public OTA
     if: github.repository == 'makessr/FineShell'
