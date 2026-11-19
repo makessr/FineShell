@@ -1,5 +1,6 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
@@ -81,7 +82,15 @@ function validateVault(vault) {
   };
 }
 
-export function createSyncServer(databasePath, options) {
+function authSource(request, trustLoopbackProxy) {
+  const peer = request.socket.remoteAddress ?? "";
+  const loopback = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer);
+  const forwarded = request.headers["x-real-ip"];
+  return trustLoopbackProxy && loopback && typeof forwarded === "string" && isIP(forwarded)
+    ? forwarded : peer;
+}
+
+export function createSyncServer(databasePath, options = {}) {
   const db = new DatabaseSync(databasePath);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -135,7 +144,25 @@ export function createSyncServer(databasePath, options) {
   const pruneSessions = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
   const dummySalt = randomBytes(16);
   const attempts = new Map();
+  const sourceAttempts = new Map();
   let deriving = 0;
+  let registrations = 0;
+  let throttled = 0;
+
+  function enforceSourceLimit(request, route) {
+    const now = Date.now();
+    const key = route + "/" + authSource(request, options.trustLoopbackProxy === true);
+    let bucket = sourceAttempts.get(key);
+    if (!bucket || bucket.expires <= now) {
+      if (!bucket && sourceAttempts.size >= 10_000) {
+        throw new HttpError(429, "Too many attempts. Try again later");
+      }
+      bucket = { count: 0, expires: now + 60_000 };
+      sourceAttempts.set(key, bucket);
+    }
+    const limit = route === "/v1/login" ? 30 : 10;
+    if (++bucket.count > limit) throw new HttpError(429, "Too many attempts. Try again later");
+  }
 
   function deviceLabel(input) {
     return typeof input === "string" ? input.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
@@ -193,6 +220,9 @@ export function createSyncServer(databasePath, options) {
   const server = createServer(async (request, response) => {
     try {
       const { method, url } = request;
+      if (method === "POST" && ["/v1/login", "/v1/register", "/v1/registration/verify"].includes(url)) {
+        enforceSourceLimit(request, url);
+      }
       if (method === "GET" && url === "/healthz") {
         db.prepare("SELECT 1 FROM accounts LIMIT 1").get();
         send(response, 200, { service: "fineshell-sync", status: "ok" });
@@ -209,13 +239,17 @@ export function createSyncServer(databasePath, options) {
         return;
       }
       if (method === "POST" && (url === "/v1/register" || url === "/v1/login")) {
-        send(response, 200, await authenticate(request, url === "/v1/register"));
+        const registered = url === "/v1/register";
+        const result = await authenticate(request, registered);
+        if (registered) registrations++;
+        send(response, 200, result);
         return;
       }
       const isRecovery = url === "/v1/vault/recover" && method === "POST";
+      const isVaultStatus = url === "/v1/vault/status" && method === "GET";
       const deviceRoute = /^\/v1\/devices\/([a-f0-9]{32})$/.exec(url ?? "");
       if (url !== "/v1/vault" && url !== "/v1/logout" && url !== "/v1/devices" &&
-          url !== "/v1/devices/synced" && url !== "/v1/devices/name" && !deviceRoute && !isRecovery) {
+          url !== "/v1/devices/synced" && url !== "/v1/devices/name" && !deviceRoute && !isRecovery && !isVaultStatus) {
         throw new HttpError(404, "Not found");
       }
       const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
@@ -246,6 +280,9 @@ export function createSyncServer(databasePath, options) {
           throw new HttpError(404, "Device not found");
         }
         send(response, 200, {});
+      } else if (isVaultStatus) {
+        const { revision, vault } = readVault.get(session.account_id);
+        send(response, 200, { revision, fingerprint: vault ? hashToken(vault) : null });
       } else if (url === "/v1/vault" && method === "GET") {
         const { revision, vault } = readVault.get(session.account_id);
         send(response, 200, { revision, vault: vault && JSON.parse(vault) });
@@ -271,6 +308,10 @@ export function createSyncServer(databasePath, options) {
       }
     } catch (error) {
       if (error instanceof HttpError) {
+        if (error.status === 429) {
+          throttled++;
+          request.resume();
+        }
         send(response, error.status, { error: error.message });
       } else {
         console.error("Sync request failed", error.code ?? error.name);
@@ -283,6 +324,15 @@ export function createSyncServer(databasePath, options) {
     for (const [email, times] of attempts) {
       if (times.at(-1) < cutoff) attempts.delete(email);
     }
+    const now = Date.now();
+    for (const [source, bucket] of sourceAttempts) {
+      if (bucket.expires <= now) sourceAttempts.delete(source);
+    }
+    if (registrations >= 10 || throttled >= 20) {
+      console.warn("FineShell authentication activity", JSON.stringify({ registrations, throttled, windowSeconds: 60 }));
+    }
+    registrations = 0;
+    throttled = 0;
   }, 60_000).unref();
   server.on("close", () => {
     clearInterval(sweep);
@@ -300,7 +350,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const sendVerification = registration === "invite"
     ? createVerificationMailer(process.env)
     : undefined;
-  const server = createSyncServer(databasePath, { registration, sendVerification });
+  const server = createSyncServer(databasePath, {
+    registration,
+    sendVerification,
+    trustLoopbackProxy: process.env.FINESHELL_SYNC_TRUST_LOOPBACK_PROXY === "1",
+  });
   server.listen(port, host, () => {
     console.log(`FineShell sync listening on ${host}:${port}`);
   });

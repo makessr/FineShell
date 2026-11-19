@@ -646,28 +646,35 @@ function App() {
   const serverMonitorPanel = (
     <aside className="panel server-monitor-sidebar">
       <div className="server-monitor-content">
-        <Suspense
-          fallback={
-            <div className="server-monitor-loading">
-              <Typography.Text type="secondary">正在加载监控…</Typography.Text>
+        {activeSession ? (
+          <Suspense
+            fallback={
+              <div className="server-monitor-loading">
+                <Typography.Text type="secondary">正在加载监控…</Typography.Text>
+              </div>
+            }
+          >
+            <ServerMonitorPanel
+              onReconnect={() => reconnectSession(activeSession)}
+              onSendToAi={(sessionId, request) =>
+                void handoffContext(sessionId, request)
+              }
+              onSnapshotChange={updateMonitorSnapshot}
+              onPortForwardStatusChange={(status) =>
+                updatePortForwardStatus(activeSession.id, status)
+              }
+              refreshIntervalSeconds={settings.monitorRefreshIntervalSeconds}
+              session={activeSession}
+            />
+          </Suspense>
+        ) : (
+          <section className="server-monitor is-unavailable">
+            <div className="server-monitor-heading">
+              <Typography.Text bold>服务器监控</Typography.Text>
             </div>
-          }
-        >
-          <ServerMonitorPanel
-            onReconnect={() => {
-              if (activeSession) reconnectSession(activeSession);
-            }}
-            onSendToAi={(sessionId, request) =>
-              void handoffContext(sessionId, request)
-            }
-            onSnapshotChange={updateMonitorSnapshot}
-            onPortForwardStatusChange={(status) =>
-              activeSession && updatePortForwardStatus(activeSession.id, status)
-            }
-            refreshIntervalSeconds={settings.monitorRefreshIntervalSeconds}
-            session={activeSession}
-          />
-        </Suspense>
+            <Typography.Text type="secondary">打开主机会话后查看监控。</Typography.Text>
+          </section>
+        )}
       </div>
     </aside>
   );
