@@ -40,7 +40,7 @@ function Close-TestProcess {
     }
 }
 function Start-TestApp {
-    Start-Process -FilePath $binary -WorkingDirectory $install -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $binary -WorkingDirectory $install -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $workspace 'app-stderr.log')
 }
 
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -56,9 +56,20 @@ $marker = [guid]::NewGuid().ToString('N')
 try {
     $setup = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$install" -WindowStyle Hidden -Wait -PassThru
     if ($setup.ExitCode -ne 0 -or (Get-TestVersion) -ne $Baseline) { throw 'The baseline installation failed.' }
-    Start-TestApp
+    $app = Start-TestApp
+    Write-Host "FineShell PID: $($app.Id), runner session: $((Get-Process -Id $PID).SessionId), interactive: $([Environment]::UserInteractive)"
     & $Node (Join-Path $PSScriptRoot 'ota.mjs') update $port $Baseline $Target $marker
-    if ($LASTEXITCODE) { throw 'Could not activate the built-in updater.' }
+    if ($LASTEXITCODE) {
+        $app.Refresh()
+        if ($app.HasExited) {
+            Write-Host ('FineShell exited with 0x{0:X8}.' -f $app.ExitCode)
+        } else {
+            Write-Host 'FineShell is still running.'
+        }
+        Get-Content -LiteralPath (Join-Path $workspace 'app-stderr.log') -Tail 30 | Write-Host
+        Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Id,SessionId,MainWindowHandle | Format-Table | Out-Host
+        throw 'Could not activate the built-in updater.'
+    }
 
     $deadline = [DateTime]::UtcNow.AddMinutes(4)
     do {
@@ -76,7 +87,7 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     if (!$endpoint) {
         Close-TestProcess
-        Start-TestApp
+        Start-TestApp | Out-Null
     }
     & $Node (Join-Path $PSScriptRoot 'ota.mjs') verify $port $Baseline $Target $marker
     if ($LASTEXITCODE) { throw 'The upgraded application failed runtime verification.' }
