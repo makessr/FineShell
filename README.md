@@ -123,6 +123,8 @@ SSH 工作区可保存当前窗口的已保存主机会话及分屏布局，之�
 
 栈渡源码在本仓库维护。现有 FineShell 客户端的安装包与应用内更新仍由原发行仓库提供。 [FineShell 已发布安装包](https://github.com/makessr/FineShell/releases)
 
+首个签名过渡版计划沿用原发行仓库和现有更新签名，供已安装的 FineShell 客户端升级。发布流程会检查客户端配置和安装包下载地址是否都指向本次发布仓库。 [更新渠道迁移说明](docs/release-pipeline.md#从-fineshell-过渡到栈渡)
+
 | v0.5.0 发布目标 | 安装包 |
 | --- | --- |
 | Windows x64 | `.exe`（NSIS）、`.msi` |
