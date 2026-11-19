@@ -1,0 +1,133 @@
+name: Windows two-hop update channel rehearsal
+
+on:
+  push:
+    branches: [test/updater-channel-two-hop]
+
+permissions:
+  contents: read
+
+env:
+  BASELINE: '0.6.0'
+  BRIDGE: '0.6.901'
+  TARGET: '0.6.902'
+
+jobs:
+  build:
+    if: github.repository == 'makessr/FineShell'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          save-if: false
+      - name: Verify the official baseline and create an ephemeral new-channel key
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP 'FineShell-v0.6.0.exe'
+          curl.exe --silent --show-error --fail --location --retry 3 --output $file 'https://github.com/makessr/FineShell/releases/download/v0.6.0/FineShell_0.6.0_windows_x64-setup.exe'
+          if ($LASTEXITCODE) { throw 'Could not download the baseline installer.' }
+          if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne 'D777321CD568C07036E19492DD5AEC5B10EFA7F45B298BFE076D961DBC2424F1') {
+            throw 'The baseline installer SHA-256 does not match the official asset.'
+          }
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE) { throw 'Bun install failed.' }
+          $key = Join-Path $env:RUNNER_TEMP 'zhandu-rehearsal.key'
+          bun tauri signer generate --ci --write-keys $key | Out-Null
+          if ($LASTEXITCODE -or !(Test-Path -LiteralPath "$key.pub")) { throw 'Could not generate the rehearsal key.' }
+          npm install --prefix "$env:RUNNER_TEMP/fixture" --ignore-scripts --no-audit --no-fund ssh2@1.17.0
+          if ($LASTEXITCODE) { throw 'Could not install the loopback SSH fixture.' }
+      - name: Build the bridge and the next ZhanDu installer
+        run: |
+          $publicKey = Join-Path $env:RUNNER_TEMP 'zhandu-rehearsal.key.pub'
+          foreach ($version in @($env:BRIDGE, $env:TARGET)) {
+            bun scripts/windows-smoke/prepare-channel-candidate.ts $version $publicKey
+            if ($LASTEXITCODE) { throw "Candidate $version configuration failed." }
+            bun scripts/check-release-version.ts "v$version" makessr/ZhanDu
+            if ($LASTEXITCODE) { throw "Candidate $version version or channel check failed." }
+            bun tauri build --bundles nsis --no-sign -- --locked
+            if ($LASTEXITCODE) { throw "Candidate $version build failed." }
+            Copy-Item -LiteralPath "src-tauri/target/release/bundle/nsis/FineShell_${version}_x64-setup.exe" -Destination (Join-Path $env:RUNNER_TEMP "FineShell-$version.exe")
+          }
+      - name: Sign the bridge and the negative control with the existing FineShell key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw 'The original updater key is unavailable.' }
+          $bridge = Join-Path $env:RUNNER_TEMP "FineShell-$env:BRIDGE.exe"
+          $next = Join-Path $env:RUNNER_TEMP "FineShell-$env:TARGET.exe"
+          bun tauri signer sign $bridge
+          if ($LASTEXITCODE) { throw 'Could not sign the bridge with the original channel key.' }
+          bun tauri signer sign $next
+          if ($LASTEXITCODE) { throw 'Could not sign the negative control.' }
+          Move-Item -LiteralPath "$next.sig" -Destination "$next.old-channel.sig"
+      - name: Sign the next ZhanDu installer with the ephemeral rehearsal key
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP 'zhandu-rehearsal.key'
+          try {
+            $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $key
+            $next = Join-Path $env:RUNNER_TEMP "FineShell-$env:TARGET.exe"
+            node node_modules/@tauri-apps/cli/tauri.js signer sign --password '' $next
+            if ($LASTEXITCODE) { throw 'Could not sign the new-channel installer.' }
+            if ((Get-FileHash -LiteralPath "$next.sig").Hash -eq (Get-FileHash -LiteralPath "$next.old-channel.sig").Hash) { throw 'Signatures must differ.' }
+          } finally {
+            Remove-Item -LiteralPath $key
+          }
+      - name: Exercise both signed channels, reject the old signer, and reconnect
+        timeout-minutes: 8
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Use only a disposable GitHub-hosted runner.' }
+          $tls = Join-Path $env:RUNNER_TEMP 'ota-tls'
+          New-Item -ItemType Directory -Path $tls | Out-Null
+          $openssl = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
+          $rootKey = Join-Path $tls 'root.key'
+          $rootPem = Join-Path $tls 'root.pem'
+          $rootCer = Join-Path $tls 'root.cer'
+          $leafKey = Join-Path $tls 'localhost.key'
+          $leafCsr = Join-Path $tls 'localhost.csr'
+          $leafPem = Join-Path $tls 'localhost.pem'
+          $extensions = Join-Path $tls 'server.ext'
+          @'
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=IP:127.0.0.1
+          '@ | Set-Content -LiteralPath $extensions -Encoding ascii
+          & $openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -subj '/CN=ZhanDu OTA Test Root' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout $rootKey -out $rootPem
+          if ($LASTEXITCODE) { throw 'Could not create the loopback test CA.' }
+          & $openssl x509 -in $rootPem -outform DER -out $rootCer
+          if ($LASTEXITCODE) { throw 'Could not encode the test CA.' }
+          & $openssl req -new -newkey rsa:2048 -nodes -subj '/CN=127.0.0.1' -keyout $leafKey -out $leafCsr
+          if ($LASTEXITCODE) { throw 'Could not create the loopback certificate request.' }
+          & $openssl x509 -req -in $leafCsr -CA $rootPem -CAkey $rootKey -CAcreateserial -days 1 -sha256 -extfile $extensions -out $leafPem
+          if ($LASTEXITCODE) { throw 'Could not sign the loopback certificate.' }
+          $root = Import-Certificate -FilePath $rootCer -CertStoreLocation Cert:/LocalMachine/Root
+          try {
+            $bridge = Join-Path $env:RUNNER_TEMP "FineShell-$env:BRIDGE.exe"
+            $next = Join-Path $env:RUNNER_TEMP "FineShell-$env:TARGET.exe"
+            $env:FINESHELL_OTA_MIRROR_FIXTURE = Join-Path $tls 'fixture.json'
+            @{
+              certificate = $leafPem
+              key = $leafKey
+              stages = @(
+                @{ repository = 'makessr/FineShell'; version = $env:BRIDGE; installer = $bridge; signature = "$bridge.sig" }
+                @{ repository = 'makessr/ZhanDu'; version = $env:TARGET; installer = $next; signature = "$next.sig"; rejectedSignature = "$next.old-channel.sig" }
+              )
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $env:FINESHELL_OTA_MIRROR_FIXTURE -Encoding utf8
+            $baseline = Join-Path $env:RUNNER_TEMP 'FineShell-v0.6.0.exe'
+            $sshFixture = Join-Path $env:RUNNER_TEMP 'fixture/node_modules/ssh2/lib/index.js'
+            ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $baseline -Baseline $env:BASELINE -Target $env:TARGET -Ssh2Module $sshFixture -UseHostedRunnerWebView2Policy
+          } finally {
+            Remove-Item -LiteralPath "Cert:/LocalMachine/Root/$($root.Thumbprint)"
+          }
