@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  filterSftpEntries,
   formatFileSize,
   formatPermissions,
   addRemotePathHistory,
@@ -27,6 +28,18 @@ import {
   setRemotePathBookmark,
   summarizeSftpTransferBatch,
 } from "./sftp-utils";
+
+test("filters SFTP entries by literal name without revealing hidden files", () => {
+  const files = [
+    { name: "App.[LOG]", kind: "file" },
+    { name: ".app.[log]", kind: "file" },
+    { name: "旧日志", kind: "directory" },
+  ];
+  expect(filterSftpEntries(files, false, " [log] ")).toEqual([files[0]]);
+  expect(filterSftpEntries(files, true, "[LOG]")).toEqual(files.slice(0, 2));
+  expect(filterSftpEntries(files, false, "日志")).toEqual([files[2]]);
+  expect(filterSftpEntries(files, true, " ")).toBe(files);
+});
 
 describe("SFTP path helpers", () => {
   test("keeps the root stable while navigating upward", () => {
