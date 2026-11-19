@@ -131,7 +131,7 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 v0.5.0 公开前，macOS 和 Linux 可从本仓库源码构建。macOS 下载包的签名和公证状态以发布说明为准。
 
-v0.5.1 的 macOS 启动验收在独立的 Apple Silicon 和 Intel 运行器上核对官方 DMG 摘要、应用签名、架构和启动窗口，并单独记录 Gatekeeper 评估结果。
+v0.5.1 的 macOS 启动验收使用 GitHub 托管的 Apple Silicon（`macos-latest`）和 Intel（`macos-15-intel`）运行器，核对官方 DMG 摘要、应用签名、架构和启动窗口，并单独记录 Gatekeeper 评估结果。
 
 ### Linux 安装
 
