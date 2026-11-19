@@ -1,0 +1,98 @@
+name: Windows x64 signed transition acceptance
+
+on:
+  push:
+    branches: [test/signed-windows-transition-v060]
+
+permissions:
+  contents: read
+
+jobs:
+  transition:
+    if: github.repository == 'makessr/FineShell'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Download and verify the official FineShell v0.5.1 installer
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP 'FineShell-v0.5.1-x64.exe'
+          curl.exe --silent --show-error --fail --location --retry 3 --output $file 'https://github.com/makessr/FineShell/releases/download/v0.5.1/FineShell_0.5.1_windows_x64-setup.exe'
+          if ($LASTEXITCODE) { throw 'Could not download the baseline installer.' }
+          if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne '77D765E02CE1C34CC5DF02790363EF4FB8DD57185F64C1D4E9D2989CCA73BA52') {
+            throw 'The baseline installer SHA-256 does not match the official asset.'
+          }
+      - name: Prepare the candidate and loopback SSH fixture
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE) { throw 'Bun install failed.' }
+          bun scripts/prepare-release.ts minor
+          if ($LASTEXITCODE) { throw 'Could not assign the candidate version.' }
+          bun scripts/check-release-version.ts v0.6.0 "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE) { throw 'Version or update channel check failed.' }
+          npm install --prefix "$env:RUNNER_TEMP/fixture" --ignore-scripts --no-audit --no-fund ssh2@1.17.0
+          if ($LASTEXITCODE) { throw 'Could not install the loopback SSH fixture.' }
+      - name: Build and sign the Windows NSIS candidate
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw 'The existing updater signing secret is unavailable.' }
+          bun tauri build --bundles nsis -- --locked
+          if ($LASTEXITCODE) { throw 'Signed NSIS build failed.' }
+          $installer = Get-Item -LiteralPath 'src-tauri/target/release/bundle/nsis/FineShell_0.6.0_x64-setup.exe'
+          Get-Item -LiteralPath ($installer.FullName + '.sig') | Out-Null
+          "SIGNED_INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Signed candidate SHA-256: $((Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash)"
+      - name: Upgrade using the built-in updater and reconnect with saved credentials
+        run: |
+          $tls = Join-Path $env:RUNNER_TEMP 'ota-tls'
+          New-Item -ItemType Directory -Path $tls | Out-Null
+          $openssl = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
+          $rootKey = Join-Path $tls 'root.key'
+          $rootPem = Join-Path $tls 'root.pem'
+          $rootCer = Join-Path $tls 'root.cer'
+          $leafKey = Join-Path $tls 'localhost.key'
+          $leafCsr = Join-Path $tls 'localhost.csr'
+          $leafPem = Join-Path $tls 'localhost.pem'
+          $extensions = Join-Path $tls 'server.ext'
+          @'
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=IP:127.0.0.1
+          '@ | Set-Content -LiteralPath $extensions -Encoding ascii
+          & $openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -subj '/CN=FineShell OTA Test Root' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout $rootKey -out $rootPem
+          if ($LASTEXITCODE) { throw 'Could not create the loopback test CA.' }
+          & $openssl x509 -in $rootPem -outform DER -out $rootCer
+          if ($LASTEXITCODE) { throw 'Could not encode the test CA.' }
+          & $openssl req -new -newkey rsa:2048 -nodes -subj '/CN=127.0.0.1' -keyout $leafKey -out $leafCsr
+          if ($LASTEXITCODE) { throw 'Could not create the loopback certificate request.' }
+          & $openssl x509 -req -in $leafCsr -CA $rootPem -CAkey $rootKey -CAcreateserial -days 1 -sha256 -extfile $extensions -out $leafPem
+          if ($LASTEXITCODE) { throw 'Could not sign the loopback certificate.' }
+          $root = Import-Certificate -FilePath $rootCer -CertStoreLocation Cert:/CurrentUser/Root
+          try {
+            $env:FINESHELL_OTA_MIRROR_FIXTURE = Join-Path $tls 'fixture.json'
+            @{
+              certificate = $leafPem; key = $leafKey
+              installer = $env:SIGNED_INSTALLER; signature = $env:SIGNED_INSTALLER + '.sig'
+            } | ConvertTo-Json | Set-Content -LiteralPath $env:FINESHELL_OTA_MIRROR_FIXTURE -Encoding utf8
+            $baseline = Join-Path $env:RUNNER_TEMP 'FineShell-v0.5.1-x64.exe'
+            $sshFixture = Join-Path $env:RUNNER_TEMP 'fixture/node_modules/ssh2/lib/index.js'
+            ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $baseline -Baseline 0.5.1 -Target 0.6.0 -Ssh2Module $sshFixture -UseHostedRunnerWebView2Policy
+          } finally {
+            Remove-Item -LiteralPath "Cert:/CurrentUser/Root/$($root.Thumbprint)"
+          }
