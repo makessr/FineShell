@@ -1,0 +1,44 @@
+name: macOS v0.5.1 OTA acceptance
+on:
+  push:
+    branches: [test/macos-ota-v051-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: macOS OTA ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            artifact: FineShell_0.5.0_darwin_aarch64.dmg
+            digest: bd46b11c20b6ad508546aac1ded78a61b89e11dab19ad89fa292deeabddd599d
+          - runner: macos-15-intel
+            arch: x86_64
+            artifact: FineShell_0.5.0_darwin_x64.dmg
+            digest: bc84852d8c75d9a30358d8c573e96f837bda78db8a71f29ba5e2ae1e80d2730a
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify the official channel and download the baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ matrix.artifact }}
+          DIGEST: ${{ matrix.digest }}
+        run: |
+          cd "$RUNNER_TEMP"
+          test "$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" = 'v0.5.1'
+          gh release download v0.5.0 --repo "$GITHUB_REPOSITORY" --pattern "$ARTIFACT"
+          printf '%s  %s\n' "$DIGEST" "$ARTIFACT" | shasum -a 256 --check
+      - name: Install the update using FineShell
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/macos-smoke/ota.sh "$RUNNER_TEMP/$ARTIFACT" "$ARCH"
