@@ -121,15 +121,14 @@ async function startSignedMirror(configPath) {
   };
 }
 
-async function installSignedTransition(oldView, mirror) {
+async function installSignedTransition(oldView, request, route) {
   await evaluate(oldView, (marker) => localStorage.setItem("fineshell-ota-smoke-marker", marker), marker);
   const update = await invoke(oldView, "application_update_check", {
-    request: { route: "custom", customUrl: mirror.url },
+    request,
   });
   assert.equal(update?.currentVersion, baseline);
   assert.equal(update?.version, target);
-  assert.equal(update?.route, "自定义镜像");
-  assert.ok(mirror.counts.manifest > 0);
+  assert.equal(update?.route, route);
   await evaluate(oldView, (updateId) => {
     const api = window.__TAURI_INTERNALS__;
     const channelId = api.transformCallback(() => {});
@@ -139,7 +138,7 @@ async function installSignedTransition(oldView, mirror) {
       window.__otaInstallError = error?.message ?? String(error);
     });
   }, update.updateId);
-  console.log("The installed v0.5.1 client found the signed candidate through its custom HTTPS update route.");
+  console.log("The installed client found the signed update through " + route + ".");
 }
 
 async function connectSavedHost(view, host, method, fixture) {
@@ -168,6 +167,7 @@ async function connectSavedHost(view, host, method, fixture) {
 
 let fixture;
 let mirror;
+const publicChannel = process.env.FINESHELL_OTA_PUBLIC_CHANNEL === "1";
 try {
   fixture = await startSshFixture(ssh2, directory);
   const oldView = await findWindow(port, "main");
@@ -195,7 +195,10 @@ try {
   const signedUpdateConfig = process.env.FINESHELL_OTA_MIRROR_FIXTURE;
   if (signedUpdateConfig) {
     mirror = await startSignedMirror(signedUpdateConfig);
-    await installSignedTransition(oldView, mirror);
+    await installSignedTransition(oldView, { route: "custom", customUrl: mirror.url }, "自定义镜像");
+    assert.ok(mirror.counts.manifest > 0);
+  } else if (publicChannel) {
+    await installSignedTransition(oldView, { route: "direct" }, "GitHub 直连");
   } else if (transitionInstaller) {
     await installTransition(oldView);
   } else {
@@ -204,7 +207,7 @@ try {
 
   const newView = await until("Restart into " + target, async () => {
     const view = await findWindow(port, "main");
-    if (mirror) {
+    if (mirror || publicChannel) {
       const error = await evaluate(view, () => window.__otaInstallError);
       if (error) throw new Error(error);
     }
@@ -213,9 +216,11 @@ try {
   await runOta("verify");
   if (mirror) {
     assert.ok(mirror.counts.installer > 0, "The updater did not request the signed mirror installer");
-    console.log("The original updater downloaded, verified, and installed the signed candidate.");
   }
-  if (transitionInstaller || mirror) {
+  if (mirror || publicChannel) {
+    console.log("The original updater downloaded, verified, and installed the signed update.");
+  }
+  if (transitionInstaller || mirror || publicChannel) {
     await until("ZhanDu transition branding", () => evaluate(newView, () =>
       document.title === "栈渡" &&
       document.querySelector(".application-titlebar-brand")?.innerText.trim() === "栈渡"));

@@ -1,0 +1,58 @@
+name: Windows public v0.6.0 OTA acceptance
+
+on:
+  push:
+    branches: [test/windows-public-ota-v060]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: Windows ${{ matrix.arch }} public OTA
+    if: github.repository == 'makessr/FineShell'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            baseline_sha256: 77D765E02CE1C34CC5DF02790363EF4FB8DD57185F64C1D4E9D2989CCA73BA52
+          - arch: arm64
+            runner: windows-11-arm
+            baseline_sha256: 52A40172CBB63602A05A6420E3E15B2C62CF5B44E3F0937211DF849269B1B520
+    env:
+      WINDOWS_ARCH: ${{ matrix.arch }}
+      BASELINE_SHA256: ${{ matrix.baseline_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+          architecture: ${{ matrix.arch }}
+      - name: Verify the public manifest and the baseline installer
+        run: |
+          if ($env:RUNNER_ARCH -ne $env:WINDOWS_ARCH) { throw 'Runner architecture differs from the candidate architecture.' }
+          $releaseRoot = 'https://github.com/makessr/FineShell/releases'
+          $manifest = Invoke-RestMethod "$releaseRoot/latest/download/latest.json" -TimeoutSec 20
+          if ($manifest.version -ne '0.6.0') { throw 'The official manifest does not yet offer v0.6.0.' }
+          $file = Join-Path $env:RUNNER_TEMP 'FineShell-v0.5.1.exe'
+          $url = "$releaseRoot/download/v0.5.1/FineShell_0.5.1_windows_$env:WINDOWS_ARCH-setup.exe"
+          curl.exe --silent --show-error --fail --location --retry 3 --output $file $url
+          if ($LASTEXITCODE) { throw 'Could not download the baseline installer.' }
+          if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $env:BASELINE_SHA256) {
+            throw 'The baseline installer SHA-256 does not match the official asset.'
+          }
+      - name: Upgrade from GitHub and reconnect with saved credentials
+        env:
+          FINESHELL_OTA_PUBLIC_CHANNEL: "1"
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/fixture" --ignore-scripts --no-audit --no-fund ssh2@1.17.0
+          if ($LASTEXITCODE) { throw 'Could not install the loopback SSH fixture.' }
+          $baseline = Join-Path $env:RUNNER_TEMP 'FineShell-v0.5.1.exe'
+          $sshFixture = Join-Path $env:RUNNER_TEMP 'fixture/node_modules/ssh2/lib/index.js'
+          ./scripts/windows-smoke/ota.ps1 -VerifiedInstaller $baseline -Baseline 0.5.1 -Target 0.6.0 -Ssh2Module $sshFixture -UseHostedRunnerWebView2Policy -RequireArm64:($env:WINDOWS_ARCH -eq 'arm64')
