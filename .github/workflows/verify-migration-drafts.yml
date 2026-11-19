@@ -2,14 +2,14 @@ name: Verify v0.6.1 and v0.6.2 migration drafts
 
 on:
   push:
-    branches: [test/verify-migration-drafts]
+    branches: [test/verify-migration-drafts, test/run-migration-ota]
 
 permissions:
   contents: write
 
 jobs:
   audit:
-    if: github.repository == 'makessr/FineShell' || github.repository == 'makessr/ZhanDu'
+    if: github.ref == 'refs/heads/test/verify-migration-drafts' && (github.repository == 'makessr/FineShell' || github.repository == 'makessr/ZhanDu')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -37,7 +37,7 @@ jobs:
           node scripts/verify-draft-release.mjs "$RUNNER_TEMP/assets" "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/signer.json" "$RUNNER_TEMP/verifier/debug/verify-release-signature" "$GITHUB_REPOSITORY" "$TAG" "$RELEASE_SHA"
 
   windows-ota:
-    if: github.repository == 'makessr/FineShell'
+    if: github.repository == 'makessr/FineShell' && github.ref == 'refs/heads/test/run-migration-ota'
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
