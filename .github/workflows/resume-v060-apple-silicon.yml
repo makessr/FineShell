@@ -36,7 +36,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/44554334127" |
             jq -e '.status == "completed" and .conclusion == "failure"'
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" |
-            jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" +              '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 14'
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 14'
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_SHA }}
@@ -110,7 +110,7 @@ jobs:
           manifest="$RUNNER_TEMP/updater/latest.json"
           metadata="$RUNNER_TEMP/updater/release.json"
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$metadata"
-          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" +            '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 17' "$metadata"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 17' "$metadata"
           gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP/updater"
           bun scripts/normalize-updater-manifest.ts "$manifest" "$metadata" "$RELEASE_TAG"
           bun scripts/validate-updater-manifest.ts "$manifest" "$RELEASE_TAG" "$GITHUB_REPOSITORY" all
