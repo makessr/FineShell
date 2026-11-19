@@ -75,18 +75,17 @@ async function installTransition(oldView) {
   });
 }
 
-async function startSignedMirror(configPath) {
-  const { certificate, key, installer, signature } = JSON.parse(await readFile(configPath, "utf8"));
-  const source = "https://github.com/makessr/FineShell/releases";
+async function startSignedMirror({ certificate, key, installer, signature, repository, version }) {
+  const source = "https://github.com/" + repository + "/releases";
   const manifestPath = "/" + source + "/latest/download/latest.json";
-  const downloadUrl = source + "/download/v" + target + "/FineShell-bridge.exe";
+  const downloadUrl = source + "/download/v" + version + "/FineShell-rehearsal.exe";
   const platform = { url: downloadUrl, signature: (await readFile(signature, "utf8")).trim() };
   assert.ok(platform.signature);
   const architecture = { x64: "x86_64", arm64: "aarch64" }[process.arch];
   assert.ok(architecture, "Unsupported Windows updater architecture");
   const platformKey = "windows-" + architecture;
   const manifest = JSON.stringify({
-    version: target,
+    version,
     platforms: { [platformKey]: platform, [platformKey + "-nsis"]: platform },
   });
   const size = (await stat(installer)).size;
@@ -94,7 +93,7 @@ async function startSignedMirror(configPath) {
   const server = createServer({ cert: await readFile(certificate), key: await readFile(key) }, (req, res) => {
     if (req.method === "GET" && req.url === manifestPath) {
       counts.manifest++;
-      console.log("The loopback update mirror served the candidate manifest.");
+      console.log("The loopback update mirror served " + repository + " v" + version + ".");
       res.writeHead(200, { "Content-Type": "application/json" }).end(manifest);
     } else if (req.method === "GET" && req.url === "/" + downloadUrl) {
       const stream = createReadStream(installer);
@@ -121,16 +120,17 @@ async function startSignedMirror(configPath) {
   };
 }
 
-async function installSignedTransition(oldView, request, route) {
-  await evaluate(oldView, (marker) => localStorage.setItem("fineshell-ota-smoke-marker", marker), marker);
-  const update = await invoke(oldView, "application_update_check", {
-    request,
+async function beginSignedUpdate(view, mirror, currentVersion, nextVersion) {
+  const update = await invoke(view, "application_update_check", {
+    request: { route: "custom", customUrl: mirror.url },
   });
-  assert.equal(update?.currentVersion, baseline);
-  assert.equal(update?.version, target);
-  assert.equal(update?.route, route);
-  await evaluate(oldView, (updateId) => {
+  assert.equal(update?.currentVersion, currentVersion);
+  assert.equal(update?.version, nextVersion);
+  assert.equal(update?.route, "自定义镜像");
+  assert.ok(mirror.counts.manifest > 0);
+  await evaluate(view, (updateId) => {
     const api = window.__TAURI_INTERNALS__;
+    delete window.__otaInstallError;
     const channelId = api.transformCallback(() => {});
     void api.invoke("application_update_download_and_install", {
       updateId, onEvent: "__CHANNEL__:" + channelId,
@@ -138,7 +138,55 @@ async function installSignedTransition(oldView, request, route) {
       window.__otaInstallError = error?.message ?? String(error);
     });
   }, update.updateId);
-  console.log("The installed client found the signed update through " + route + ".");
+}
+
+async function runSignedHops(oldView, config) {
+  let view = oldView;
+  let current = baseline;
+  const { certificate, key, stages } = config;
+  assert.equal(stages.at(-1)?.version, target);
+  await evaluate(view, (marker) => localStorage.setItem("fineshell-ota-smoke-marker", marker), marker);
+  for (const stage of stages) {
+    if (stage.rejectedSignature) {
+      const wrongSigner = await startSignedMirror({
+        ...stage, certificate, key, signature: stage.rejectedSignature,
+      });
+      try {
+        await beginSignedUpdate(view, wrongSigner, current, stage.version);
+        await until("Reject the previous channel's signature", () =>
+          evaluate(view, () => window.__otaInstallError), 60_000);
+        assert.ok(wrongSigner.counts.installer > 0);
+        assert.equal(await invoke(view, "plugin:app|version"), current);
+        console.log("The cutover client rejected the previous channel's signature on the next installer.");
+      } finally {
+        await wrongSigner.close();
+      }
+    }
+
+    const mirror = await startSignedMirror({ ...stage, certificate, key });
+    try {
+      await beginSignedUpdate(view, mirror, current, stage.version);
+      view = await waitForVersion(stage.version, true);
+      assert.ok(mirror.counts.installer > 0, "The updater did not request the signed mirror installer");
+      assert.equal(await evaluate(view, () => localStorage.getItem("fineshell-ota-smoke-marker")), marker);
+      console.log("The updater verified and installed " + stage.repository + " v" + stage.version + ".");
+      current = stage.version;
+    } finally {
+      await mirror.close();
+    }
+  }
+  return view;
+}
+
+function waitForVersion(version, checkError = false) {
+  return until("Restart into " + version, async () => {
+    const view = await findWindow(port, "main");
+    if (checkError) {
+      const error = await evaluate(view, () => window.__otaInstallError);
+      if (error) throw new Error(error);
+    }
+    return await invoke(view, "plugin:app|version") === version ? view : false;
+  }, 150_000);
 }
 
 async function connectSavedHost(view, host, method, fixture) {
@@ -166,8 +214,6 @@ async function connectSavedHost(view, host, method, fixture) {
 }
 
 let fixture;
-let mirror;
-const publicChannel = process.env.FINESHELL_OTA_PUBLIC_CHANNEL === "1";
 try {
   fixture = await startSshFixture(ssh2, directory);
   const oldView = await findWindow(port, "main");
@@ -193,34 +239,20 @@ try {
   }] });
   console.log("Baseline saved two hosts, a managed encrypted key, and credentials in the Windows credential store.");
   const signedUpdateConfig = process.env.FINESHELL_OTA_MIRROR_FIXTURE;
+  let newView;
   if (signedUpdateConfig) {
-    mirror = await startSignedMirror(signedUpdateConfig);
-    await installSignedTransition(oldView, { route: "custom", customUrl: mirror.url }, "自定义镜像");
-    assert.ok(mirror.counts.manifest > 0);
-  } else if (publicChannel) {
-    await installSignedTransition(oldView, { route: "direct" }, "GitHub 直连");
-  } else if (transitionInstaller) {
-    await installTransition(oldView);
+    newView = await runSignedHops(oldView, JSON.parse(await readFile(signedUpdateConfig, "utf8")));
   } else {
-    await runOta("update");
+    if (transitionInstaller) {
+      await installTransition(oldView);
+    } else {
+      await runOta("update");
+    }
+    newView = await waitForVersion(target);
   }
 
-  const newView = await until("Restart into " + target, async () => {
-    const view = await findWindow(port, "main");
-    if (mirror || publicChannel) {
-      const error = await evaluate(view, () => window.__otaInstallError);
-      if (error) throw new Error(error);
-    }
-    return await invoke(view, "plugin:app|version") === target ? view : false;
-  }, 150_000);
   await runOta("verify");
-  if (mirror) {
-    assert.ok(mirror.counts.installer > 0, "The updater did not request the signed mirror installer");
-  }
-  if (mirror || publicChannel) {
-    console.log("The original updater downloaded, verified, and installed the signed update.");
-  }
-  if (transitionInstaller || mirror || publicChannel) {
+  if (transitionInstaller || signedUpdateConfig) {
     await until("ZhanDu transition branding", () => evaluate(newView, () =>
       document.title === "栈渡" &&
       document.querySelector(".application-titlebar-brand")?.innerText.trim() === "栈渡"));
@@ -237,7 +269,6 @@ try {
   await invoke(newView, "delete_private_key_passphrase", { hostId: keyId });
   await invoke(newView, "managed_ssh_key_delete", { keyId });
 } finally {
-  await mirror?.close();
   await fixture?.close();
   await rm(directory, { recursive: true, force: true });
 }

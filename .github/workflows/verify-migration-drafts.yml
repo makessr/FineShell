@@ -1,0 +1,53 @@
+name: Verify v0.6.1 and v0.6.2 migration drafts
+
+on:
+  push:
+    branches: [test/verify-migration-drafts]
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.repository == 'makessr/FineShell' || github.repository == 'makessr/ZhanDu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TAG: ${{ github.repository == 'makessr/FineShell' && 'v0.6.1' || 'v0.6.2' }}
+      RELEASE_SHA: ${{ github.repository == 'makessr/FineShell' && '268722fe7800fcfca84ce972111b1f139cfbb304' || 'e2e1b9051ce20159d807ea199764f61a8a9f8b1e' }}
+      SIGNER_SHA: ${{ github.repository == 'makessr/FineShell' && '0209451ba6c7d9c71a34c9a162a2b2752786947c' || 'e2e1b9051ce20159d807ea199764f61a8a9f8b1e' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify each draft asset and updater signature in the source repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/src-tauri/tauri.conf.json?ref=$SIGNER_SHA" --jq '.content' | base64 -d > "$RUNNER_TEMP/signer.json"
+          id="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$id" > "$RUNNER_TEMP/release.json"
+          jq -e --arg tag "$TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha' "$RUNNER_TEMP/release.json"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets"
+          cargo build --locked --manifest-path scripts/verify-release-signature/Cargo.toml --target-dir "$RUNNER_TEMP/verifier"
+          node scripts/verify-draft-release.mjs "$RUNNER_TEMP/assets" "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/signer.json" "$RUNNER_TEMP/verifier/debug/verify-release-signature" "$GITHUB_REPOSITORY" "$TAG" "$RELEASE_SHA"
+
+  windows-ota:
+    if: github.repository == 'makessr/FineShell'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - name: Install the two signed draft updates in an isolated Windows environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/windows-smoke/test-migration-drafts.ps1
