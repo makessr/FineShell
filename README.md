@@ -269,3 +269,5 @@ GitHub 仓库需要配置 Tauri 更新签名私钥 `TAURI_SIGNING_PRIVATE_KEY`�
 ## 开源许可
 
 栈渡以 Apache License 2.0 开源。你可以使用、修改和分发本项目，并需保留许可证及相关版权声明。 [许可证](LICENSE)
+
+Apple Silicon 托管运行器无法分配时，可在 Intel macOS 运行器上从同一提交交叉构建。补齐产物后继续保留发布草稿。

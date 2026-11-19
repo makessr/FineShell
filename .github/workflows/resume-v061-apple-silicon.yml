@@ -1,0 +1,123 @@
+name: Complete v0.6.1 Apple Silicon draft
+
+on:
+  push:
+    branches: [release/resume-v061-apple-silicon]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: resume-draft-v061-apple-silicon
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v0.6.1
+  RELEASE_ID: '451650711'
+  RELEASE_SHA: '268722fe7800fcfca84ce972111b1f139cfbb304'
+
+jobs:
+  build:
+    if: github.repository == 'makessr/FineShell'
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Confirm the original run stopped and the same draft is still available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/44572287430" |
+            jq -e '.status == "completed" and .conclusion == "failure"'
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" |
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 14'
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: bun scripts/check-release-version.ts "$RELEASE_TAG" "$GITHUB_REPOSITORY"
+      - run: bun install --frozen-lockfile
+      - id: notes
+        run: |
+          delimiter="FINESHELL_RELEASE_NOTES_${RANDOM}_${RANDOM}"
+          {
+            echo "body<<$delimiter"
+            bun scripts/extract-release-notes.ts "$RELEASE_TAG"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+      - name: Cross-build and sign the missing Apple Silicon packages
+        uses: tauri-apps/tauri-action@v1
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: --target aarch64-apple-darwin --bundles app,dmg
+          generateReleaseNotes: false
+          releaseId: ${{ env.RELEASE_ID }}
+          releaseAssetNamePattern: "[name]_[version]_[platform]_[arch][setup][ext]"
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          retryAttempts: 2
+          tagName: ${{ env.RELEASE_TAG }}
+          tauriScript: bun tauri
+          updaterJsonPreferNsis: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+      - name: Verify Apple Silicon architecture and linked macOS libraries
+        run: |
+          binary=src-tauri/target/aarch64-apple-darwin/release/fineshell
+          [[ "$(lipo -archs "$binary")" == arm64 ]]
+          dependencies="$(otool -L "$binary")"
+          printf '%s\n' "$dependencies"
+          unexpected="$(printf '%s\n' "$dependencies" | tail -n +2 | awk '{ print $1 }' | awk '!/^\/System\// && !/^\/usr\/lib\// && !/^@rpath\// && !/^@loader_path\// && !/^@executable_path\//')"
+          [[ -z "$unexpected" ]]
+  finalize-draft:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - name: Apply the regular manifest and sync service gates and retain the complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_HEALTH_URL: ${{ vars.FINESHELL_SYNC_HEALTH_URL }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/updater"
+          manifest="$RUNNER_TEMP/updater/latest.json"
+          metadata="$RUNNER_TEMP/updater/release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$metadata"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" '.draft and .tag_name == $tag and .target_commitish == $sha and (.assets | length) == 17' "$metadata"
+          gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP/updater"
+          bun scripts/normalize-updater-manifest.ts "$manifest" "$metadata" "$RELEASE_TAG"
+          bun scripts/validate-updater-manifest.ts "$manifest" "$RELEASE_TAG" "$GITHUB_REPOSITORY" all
+          bun scripts/extract-release-notes.ts "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
+          if [[ -n "$SYNC_HEALTH_URL" ]]; then
+            curl --fail --silent --show-error --max-time 15 "$SYNC_HEALTH_URL" |
+              jq -e '.service == "fineshell-sync" and .status == "ok"'
+          fi
+          gh release upload "$RELEASE_TAG" "$manifest" --clobber
+          echo "The v0.6.1 draft is complete and remains unpublished."
