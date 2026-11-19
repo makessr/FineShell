@@ -112,6 +112,8 @@ FineShell 将 AI 助手放在当前 SSH 工作区右侧。它可以结合服务�
 
 ## 下载与安装
 
+v0.4.1 减少主机同步的空闲流量，启用桌面内容安全策略，并在打开主机会话时才加载监控图表。自建同步服务升级后也支持按来源限制登录、注册和验证码请求。
+
 可在 [本仓库的 Releases](https://github.com/makessr/FineShell/releases) 下载已发布的 Windows 安装包。应用通过本仓库发布的签名更新清单检查更新。
 
 - Windows x64 提供 `.exe`（NSIS）和 `.msi`。
