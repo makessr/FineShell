@@ -34,14 +34,14 @@ jobs:
             runner: ubuntu-22.04-arm
             arch: arm64
             artifact: FineShell_0.5.1_linux_arm64.deb
-            digest: 6c2cb8883983064f1fb38bf26941520493191557b7211df849269b1b520
+            digest: 6c2cb8883983064f1fb38bf26941520493191557b7214a3cacd8150c627f891b
           - name: macOS Intel
             runner: macos-15-intel
             arch: x86_64
             artifact: FineShell_0.5.1_darwin_x64.dmg
             digest: 6a386bb79c1f670d1151c153bf55a3110ba72f6f302d1dad46d73d9ef962608f
           - name: macOS Apple Silicon
-            runner: macos-latest
+            runner: macos-15
             arch: arm64
             artifact: FineShell_0.5.1_darwin_aarch64.dmg
             digest: 1d70aa526f8fe25536d5d55a97c68004f569adeb8b42407819985f8978cae5f2
